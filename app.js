@@ -9,7 +9,7 @@
 'use strict';
 
 /** 앱 버전. 진단 기록·설정에 보여서 두 폰이 같은 버전인지 확인한다(배포 때마다 올림). */
-const APP_VERSION = '2026.10.17-9';
+const APP_VERSION = '2026.10.18-10';
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,7 +21,7 @@ const QUALITY = {
   low: { w: 640, h: 480, fps: 20, kbps: 800 },
 };
 const STUN = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
-const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '', brokers: '' };
+const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '', brokers: '', night: 'auto', nightLevel: 'mid', nightSnap: true };
 const KEY_SETTINGS = 'homecam.settings.v2';
 const KEY_PAIR = 'homecam.pair.v2'; // 카메라 폰: 내 ID·토큰·비밀키
 const KEY_CAMS = 'homecam.cams.v2'; // 뷰어 폰: 등록한 카메라 목록
@@ -601,6 +601,7 @@ async function openStream() {
   for (const t of stream.getTracks()) t.addEventListener('ended', onTrackEnded);
   const at = stream.getAudioTracks()[0]; if (at) at.enabled = cam.micOn;
   $('#camVideo').srcObject = stream;
+  tuneExposure(stream.getVideoTracks()[0], q);
   $('#camVideo').classList.toggle('mirror', cam.facing === 'user');
   $('#camMic').hidden = !at; $('#camMic').classList.toggle('on', cam.micOn);
   for (const ss of cam.sessions.values()) {
@@ -613,6 +614,23 @@ async function openStream() {
     tuneSenders(ss.pc);
   }
   sendInfo();
+}
+
+/** 어두운 곳 대비: 되는 기기에서만 연속 자동노출 + 노출보정 약간 +, 프레임이 너무 떨어지지 않게. 안 되면 조용히 넘어감. */
+async function tuneExposure(vt, q) {
+  if (!vt || !vt.getCapabilities) return dlog('[카메라] 노출 조절: 지원 안 함(getCapabilities 없음)');
+  const caps = vt.getCapabilities(); const adv = {};
+  if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+  const ec = caps.exposureCompensation;
+  if (ec && ec.max > 0) { const step = ec.step || 0.1; adv.exposureCompensation = Math.min(ec.max, Math.round(0.7 / step) * step); }
+  let ok = true;
+  if (Object.keys(adv).length) { try { await vt.applyConstraints({ advanced: [adv] }); } catch { ok = false; } }
+  let fps = '';
+  if (caps.frameRate && caps.frameRate.max >= 15) {
+    try { await vt.applyConstraints({ ...vt.getConstraints(), frameRate: { ideal: q.fps, min: 15 } }); fps = ' · 최소 15fps 적용'; } catch { fps = ' · 최소 fps 고정 불가'; }
+  }
+  dlog('[카메라] 노출 조절: 자동노출 ' + (adv.exposureMode ? '✓' : '✗') + ' · 노출보정 ' + (adv.exposureCompensation !== undefined ? '+' + adv.exposureCompensation.toFixed(1) : '✗') + (ok ? '' : '(적용 실패)') +
+    ' · 플래시 ' + (caps.torch ? '✓' : '✗') + ' · fps ' + (caps.frameRate ? Math.round(caps.frameRate.min || 0) + '~' + Math.round(caps.frameRate.max) : '?') + fps);
 }
 
 let reopening = false;
@@ -933,7 +951,7 @@ async function onViewData(ss, raw) {
     if (m.v !== APP_VERSION && (!view.info || view.info.v !== m.v)) { dlog('[뷰어] 카메라 앱 버전이 달라요: ' + (m.v || '옛 버전')); toast('카메라 폰 앱이 다른 버전이에요. 카메라 폰에서 앱을 껐다 켜 주세요.', 5000); }
     view.info = m;
     $('#vTorch').hidden = !m.torch; $('#vTorch').classList.toggle('on', !!m.torchOn);
-    $('#viewVideo').classList.toggle('mirror', m.facing === 'user');
+    $('#viewVideo').classList.toggle('mirror', m.facing === 'user'); $('#nightCanvas').classList.toggle('mirror', m.facing === 'user');
   } else if (m.t === 'photo') {
     const timer = view.photo && view.photo.timer;
     if (m.err || !(m.size > 0) || m.size > 30e6) { clearTimeout(timer); view.photo = null; framePhoto(); }
@@ -953,6 +971,7 @@ async function startMedia(ss) {
   v.onloadeddata = () => {
     if (view.ss !== ss) return;
     view.gotVideo = true; setStatus('view', '연결됨', 'ok'); wakeHud(); dlog('[뷰어] 영상 수신 시작');
+    startNight();
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); soundBtn(); });
     soundBtn();
   };
@@ -975,6 +994,15 @@ async function viewStatsLoop() {
     $('#viewStats').textContent = text;
     await sleep(2000);
   }
+}
+
+/** 야간 보정 시작(영상이 들어올 때마다). 보정 중이면 달 배지를 보여 준다. */
+function startNight() {
+  let was = false;
+  Night.start($('#viewVideo'), $('#nightCanvas'), () => ({ mode: view.s.night, level: view.s.nightLevel }), (on, b, L) => {
+    $('#nightBadge').hidden = !on;
+    if (on !== was) { was = on; dlog('[뷰어] 야간 보정 ' + (on ? '켜짐' : '꺼짐') + ' (밝기 ' + Math.round(L * 100) + '%, 세기 ' + Math.round(b * 100) + '%)'); }
+  });
 }
 
 /** 연결 경로 표시: 직접 / 중계(TURN). */
@@ -1036,14 +1064,20 @@ function takePhoto() {
 function photoChunk(buf) {
   const ph = view.photo; if (!ph || !ph.size) return;
   ph.parts.push(buf); ph.got += buf.byteLength;
-  if (ph.got >= ph.size) { clearTimeout(ph.timer); view.photo = null; showPhoto(new Blob(ph.parts, { type: 'image/jpeg' }), ph.w, ph.h, '카메라 원본'); }
+  if (ph.got >= ph.size) {
+    clearTimeout(ph.timer); view.photo = null;
+    const blob = new Blob(ph.parts, { type: 'image/jpeg' });
+    if (view.s.nightSnap && Night.active) Night.enhanceBlob(blob).then((e) => showPhoto(e || blob, ph.w, ph.h, '카메라 원본' + (e ? ' · 야간 보정' : '')));
+    else showPhoto(blob, ph.w, ph.h, '카메라 원본');
+  }
 }
 function framePhoto() {
   const v = $('#viewVideo');
   if (!v.videoWidth) return toast('아직 영상이 없어요');
-  const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
-  c.getContext('2d').drawImage(v, 0, 0);
-  c.toBlob((b) => b && showPhoto(b, c.width, c.height, '받은 화면'), 'image/jpeg', 0.92);
+  const nc = view.s.nightSnap ? Night.frameCanvas() : null; // 야간 보정 중이면 보이는 그대로(보정본)
+  const c = document.createElement('canvas'); c.width = nc ? nc.width : v.videoWidth; c.height = nc ? nc.height : v.videoHeight;
+  c.getContext('2d').drawImage(nc || v, 0, 0);
+  c.toBlob((b) => b && showPhoto(b, c.width, c.height, '받은 화면' + (nc ? ' · 야간 보정' : '')), 'image/jpeg', 0.92);
 }
 let photoUrl = '';
 function showPhoto(blob, w, h, kind) {
@@ -1067,6 +1101,7 @@ function stopViewer() {
   clearTimeout(view.timer); hangup();
   if (view.sig) { view.sig.stop(); view.sig = null; }
   if (view.mic) { view.mic.stop(); view.mic = null; }
+  Night.stop();
   $('#viewVideo').srcObject = null;
   $('#vTalk').classList.remove('on'); setLabel($('#vTalk'), '말하기');
   clearTimeout(hudTimer); $('#view').classList.remove('idle');
@@ -1133,7 +1168,7 @@ function init() {
   $('#vPhoto').onclick = takePhoto;
   $('#vFlip').onclick = () => cmd({ t: 'flip' });
   $('#vTorch').onclick = () => cmd({ t: 'torch', on: !(view.info && view.info.torchOn) });
-  $('#vFit').onclick = () => { const c = $('#viewVideo').classList.toggle('contain'); setLabel($('#vFit'), c ? '채우기' : '맞춤'); toast(c ? '잘림 없이 전체 보기' : '화면 꽉 채우기', 1200); };
+  $('#vFit').onclick = () => { const c = $('#viewVideo').classList.toggle('contain'); $('#nightCanvas').classList.toggle('contain', c); setLabel($('#vFit'), c ? '채우기' : '맞춤'); toast(c ? '잘림 없이 전체 보기' : '화면 꽉 채우기', 1200); };
   $('#vFull').onclick = toggleFull;
   // 한 번 누르면 버튼 보이기/숨기기, 두 번 빠르게 누르면 전체화면
   let tapT = 0;

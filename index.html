@@ -84,6 +84,25 @@
     <div class="field"><label class="switch"><span>30초 뒤 화면 어둡게</span><input id="autoDim" type="checkbox"></label></div>
   </section>
   <section class="card">
+    <h2>뷰어 폰</h2>
+    <div class="field"><label>야간 보정 (어두우면 밝게)</label>
+      <div class="seg">
+        <label><input type="radio" name="night" value="auto">자동</label>
+        <label><input type="radio" name="night" value="on">켜기</label>
+        <label><input type="radio" name="night" value="off">끄기</label>
+      </div>
+    </div>
+    <div class="field"><label>보정 세기</label>
+      <div class="seg">
+        <label><input type="radio" name="nightLevel" value="low">약</label>
+        <label><input type="radio" name="nightLevel" value="mid">보통</label>
+        <label><input type="radio" name="nightLevel" value="high">강</label>
+      </div>
+      <small>뷰어 폰에서만 처리해요(카메라 폰 배터리 영향 없음). 너무 어두운 방은 작은 취침등 하나가 가장 효과적이에요.</small>
+    </div>
+    <div class="field"><label class="switch"><span>사진 저장할 때 보정본으로</span><input id="nightSnap" type="checkbox"></label></div>
+  </section>
+  <section class="card">
     <details>
       <summary>연결이 안 될 때 (고급)</summary>
       <div class="field"><small>LTE·5G에서 서로 안 붙으면 중계(TURN) 서버를 두 폰에 똑같이 넣어요. 값은 이 폰에만 저장돼요.</small></div>
@@ -170,8 +189,9 @@
 <!-- 6. 뷰어(B) 화면 -->
 <section id="view" class="stage" hidden>
   <video id="viewVideo" playsinline autoplay></video>
+  <canvas id="nightCanvas" hidden></canvas>
   <div class="hud top">
-    <div class="row-pills"><div class="pill"><span id="viewDot" class="dot"></span><span id="viewStatus">준비 중…</span></div><span id="viewRoute" class="route" hidden></span></div>
+    <div class="row-pills"><div class="pill"><span id="viewDot" class="dot"></span><span id="viewStatus">준비 중…</span></div><span id="viewRoute" class="route" hidden></span><span id="nightBadge" class="route night" hidden><svg class="ic xs"><use href="#i-moon"/></svg>야간 보정</span></div>
     <div id="viewStats" class="stats"></div>
   </div>
   <div class="hud bottom">
@@ -198,6 +218,7 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="qr.js"></script>
+<script src="night.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 // 홈캠 서비스 워커: 앱 파일(같은 사이트)만 저장해 두고 빨리 띄운다. 영상·외부 요청은 건드리지 않는다.
-const CACHE = 'homecam-v9';
-const SHELL = ['./', 'index.html', 'style.css', 'qr.js', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'homecam-v10';
+const SHELL = ['./', 'index.html', 'style.css', 'qr.js', 'night.js', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
