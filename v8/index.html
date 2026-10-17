@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob: mediastream:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark light">
+<title>홈캠</title>
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6fa" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="홈캠">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 아이콘 묶음(직접 그린 선 아이콘) -->
+<svg width="0" height="0" aria-hidden="true">
+  <symbol id="i-cam" viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="3"/><path d="M16 10.5l6-3.5v10l-6-3.5z"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v7h-4M14 18v3"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-shot" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L5 14h6l-1 8 8-12h-6z"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M5 14v6h14v-6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17.5v.5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></symbol>
+</svg>
+
+<!-- 1. 첫 화면: 역할 고르기 -->
+<main id="home" class="screen">
+  <div class="topbar">
+    <div class="brand"><span class="logo"><svg class="ic"><use href="#i-cam"/></svg></span>홈캠</div>
+    <button id="goSettings" class="icon-btn" aria-label="설정"><svg class="ic"><use href="#i-sliders"/></svg></button>
+  </div>
+  <p class="lead">이 폰을 어떻게 쓸까요?</p>
+  <div class="roles">
+    <button id="goCam" class="role"><span class="badge"><svg class="ic lg"><use href="#i-cam"/></svg></span><span><b>카메라</b><span>집에 두는 폰 · 충전기에 꽂아 두세요</span></span></button>
+    <button id="goView" class="role"><span class="badge"><svg class="ic lg"><use href="#i-phone"/></svg></span><span><b>뷰어</b><span>밖에서 집을 보는 폰</span></span></button>
+  </div>
+  <p id="homeErr" class="err"></p>
+  <p class="trust"><svg class="ic"><use href="#i-shield"/></svg><span>QR로 등록한 내 폰만 볼 수 있어요. 영상은 두 폰 사이에서만 암호화돼 오가고, 어디에도 저장되지 않아요.</span></p>
+</main>
+
+<!-- 2. 설정 -->
+<main id="settings" class="screen" hidden>
+  <div class="topbar"><button id="setBack" class="icon-btn" aria-label="뒤로"><svg class="ic"><use href="#i-back"/></svg></button><h1>설정</h1></div>
+  <section class="card">
+    <h2>카메라 폰</h2>
+    <div class="field"><label>화질</label>
+      <div class="seg">
+        <label><input type="radio" name="quality" value="max">4K</label>
+        <label><input type="radio" name="quality" value="high">1080p</label>
+        <label><input type="radio" name="quality" value="mid">720p</label>
+        <label><input type="radio" name="quality" value="low">480p</label>
+      </div>
+      <small>1080p 권장. 4K는 배터리·발열이 커요. 끊기면 낮추세요.</small>
+    </div>
+    <div class="field"><label>동시에 볼 수 있는 뷰어</label>
+      <div class="seg">
+        <label><input type="radio" name="maxViewers" value="1">1명</label>
+        <label><input type="radio" name="maxViewers" value="2">2명</label>
+      </div>
+    </div>
+    <div class="field"><label class="switch"><span>집 안 소리 보내기</span><input id="audio" type="checkbox"></label></div>
+    <div class="field"><label class="switch"><span>30초 뒤 화면 어둡게</span><input id="autoDim" type="checkbox"></label></div>
+  </section>
+  <section class="card">
+    <details>
+      <summary>연결이 안 될 때 (고급)</summary>
+      <div class="field"><small>LTE·5G에서 서로 안 붙으면 중계(TURN) 서버를 두 폰에 똑같이 넣어요. 값은 이 폰에만 저장돼요.</small></div>
+      <div class="field"><label for="turnUrl">TURN 주소</label><input id="turnUrl" autocomplete="off" placeholder="turns:example.com:443?transport=tcp"></div>
+      <div class="field"><label for="turnUser">TURN 사용자 이름</label><input id="turnUser" autocomplete="off"></div>
+      <div class="field"><label for="turnPass">TURN 비밀번호</label><input id="turnPass" type="password" autocomplete="off"></div>
+      <div class="field"><label for="server">중개 서버 (비우면 PeerJS 무료 서버)</label><input id="server" autocomplete="off" placeholder="https://my-peer-server.example.com/"></div>
+      <div class="field"><label for="brokers">보조 중개 길 (공개 MQTT 브로커)</label><input id="brokers" autocomplete="off" placeholder="비우면 기본값 · off 입력 시 사용 안 함"><small>PeerJS 서버와 함께 써서 한쪽이 끊겨도 연결돼요. 연결 신청은 열쇠로 서명돼 있어요.</small></div>
+    </details>
+  </section>
+  <button id="goDiag" class="block">진단 보기 (연결 문제 기록)</button>
+  <p id="appVer" class="muted small"></p>
+</main>
+
+<!-- 진단 기록 시트 -->
+<div id="diagSheet" class="sheet" hidden>
+  <div class="panel">
+    <div class="row"><h2 class="grow">진단 기록</h2><button id="diagClose" class="icon-btn" aria-label="닫기"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <p class="muted">연결이 안 될 때 이 화면을 캡처하거나 복사해서 보내 주세요. 열쇠는 기록되지 않아요.</p>
+    <pre id="diagLog" class="log"></pre>
+    <p id="diagEnv" class="muted small"></p>
+    <div class="row"><button id="diagCopy" class="primary grow"><svg class="ic"><use href="#i-copy"/></svg>복사</button><button id="diagClear">지우기</button></div>
+  </div>
+</div>
+
+<!-- 3. 뷰어: 카메라 목록 -->
+<main id="vhome" class="screen" hidden>
+  <div class="topbar"><button id="vBack" class="icon-btn" aria-label="뒤로"><svg class="ic"><use href="#i-back"/></svg></button><h1>내 카메라</h1></div>
+  <div id="camList" class="list"></div>
+  <button id="goPair" class="block"><svg class="ic"><use href="#i-plus"/></svg>카메라 추가</button>
+</main>
+
+<!-- 4. 뷰어: 카메라 등록 -->
+<main id="vpair" class="screen" hidden>
+  <div class="topbar"><button id="pairBack" class="icon-btn" aria-label="뒤로"><svg class="ic"><use href="#i-back"/></svg></button><h1>카메라 등록</h1></div>
+  <p class="lead">카메라 폰 화면의 <b>QR</b>을 찍으세요.</p>
+  <div id="scanWrap" class="scanbox" hidden><video id="scanVideo" playsinline muted></video></div>
+  <button id="scanBtn" class="primary block" hidden><svg class="ic"><use href="#i-qr"/></svg>QR 스캔</button>
+  <p id="scanHint" class="muted">폰 기본 카메라 앱으로 QR을 찍으면 이 화면이 열려요. 안 되면 카메라 폰에서 코드를 복사해 아래에 붙여 넣으세요.</p>
+  <section class="card">
+    <div class="field"><label for="pairCode">페어링 코드</label><textarea id="pairCode" autocomplete="off" spellcheck="false" placeholder="HC1.…"></textarea></div>
+    <div class="field"><label for="pairLabel">카메라 이름</label><input id="pairLabel" autocomplete="off" placeholder="우리집"></div>
+  </section>
+  <p id="pairErr" class="err"></p>
+  <button id="pairAdd" class="primary block">등록하고 보기</button>
+</main>
+
+<!-- 5. 카메라(A) 화면 -->
+<section id="cam" class="stage" hidden>
+  <video id="camVideo" playsinline muted autoplay></video>
+  <div class="hud top">
+    <div class="pill"><span id="camDot" class="dot"></span><span id="camStatus">준비 중…</span></div>
+    <div id="camStats" class="stats"></div>
+  </div>
+  <div class="hud bottom">
+    <button id="camPair" class="ctl"><span class="disc"><svg class="ic"><use href="#i-qr"/></svg></span>페어링</button>
+    <button id="camFlip" class="ctl"><span class="disc"><svg class="ic"><use href="#i-flip"/></svg></span>전환</button>
+    <button id="camMic" class="ctl"><span class="disc"><svg class="ic"><use href="#i-mic"/></svg></span>소리</button>
+    <button id="camDimBtn" class="ctl"><span class="disc"><svg class="ic"><use href="#i-moon"/></svg></span>어둡게</button>
+    <button id="camStop" class="ctl end"><span class="disc"><svg class="ic"><use href="#i-x"/></svg></span>끝</button>
+  </div>
+</section>
+<div id="dim" hidden><div id="dimText"></div></div>
+
+<!-- 카메라: 페어링 QR 시트 -->
+<div id="pairSheet" class="sheet" hidden>
+  <div class="panel">
+    <div class="row"><h2 class="grow">뷰어 폰으로 찍으세요</h2><button id="pairClose" class="icon-btn" aria-label="닫기"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="qrbox"><canvas id="qr" width="10" height="10"></canvas></div>
+    <p class="note"><svg class="ic"><use href="#i-warn"/></svg><span>이 QR은 집 카메라의 열쇠예요. 내 폰으로만 찍고, 남에게 보여 주거나 사진으로 보내지 마세요.</span></p>
+    <details><summary>코드를 글자로 보기 (아이폰 홈 화면 앱용)</summary>
+      <textarea id="pairText" readonly></textarea>
+      <button id="pairCopy" class="block"><svg class="ic"><use href="#i-copy"/></svg>복사</button>
+    </details>
+    <details><summary>폰을 잃어버렸거나 QR이 새어 나갔다면</summary>
+      <p class="muted">초기화하면 지금까지 등록한 뷰어는 모두 못 보게 되고, 새 QR로 다시 등록해야 해요.</p>
+      <p></p>
+      <button id="pairReset" class="danger block">페어링 초기화 (열쇠 새로 만들기)</button>
+    </details>
+    <button id="pairDone" class="primary block">완료</button>
+  </div>
+</div>
+
+<!-- 6. 뷰어(B) 화면 -->
+<section id="view" class="stage" hidden>
+  <video id="viewVideo" playsinline autoplay></video>
+  <div class="hud top">
+    <div class="pill"><span id="viewDot" class="dot"></span><span id="viewStatus">준비 중…</span></div>
+    <div id="viewStats" class="stats"></div>
+  </div>
+  <div class="hud bottom">
+    <button id="vSound" class="ctl"><span class="disc"><svg class="ic"><use href="#i-sound"/></svg></span><span>소리</span></button>
+    <button id="vTalk" class="ctl talk"><span class="disc"><svg class="ic"><use href="#i-mic"/></svg></span><span>말하기</span></button>
+    <button id="vPhoto" class="ctl"><span class="disc"><svg class="ic"><use href="#i-shot"/></svg></span>사진</button>
+    <button id="vFlip" class="ctl"><span class="disc"><svg class="ic"><use href="#i-flip"/></svg></span>전환</button>
+    <button id="vTorch" class="ctl" hidden><span class="disc"><svg class="ic"><use href="#i-bolt"/></svg></span>플래시</button>
+    <button id="vFit" class="ctl"><span class="disc"><svg class="ic"><use href="#i-fit"/></svg></span>맞춤</button>
+    <button id="vStop" class="ctl end"><span class="disc"><svg class="ic"><use href="#i-x"/></svg></span>끝</button>
+  </div>
+</section>
+
+<div id="photo" hidden>
+  <img id="photoImg" alt="찍은 사진">
+  <div id="photoInfo"></div>
+  <div class="row">
+    <a id="photoSave" class="btn primary" download><svg class="ic"><use href="#i-down"/></svg>저장</a>
+    <button id="photoShare" hidden><svg class="ic"><use href="#i-share"/></svg>공유</button>
+    <button id="photoClose">닫기</button>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="qr.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

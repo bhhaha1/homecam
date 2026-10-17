@@ -9,7 +9,7 @@
 'use strict';
 
 /** 앱 버전. 진단 기록·설정에 보여서 두 폰이 같은 버전인지 확인한다(배포 때마다 올림). */
-const APP_VERSION = '2026.10.17-7';
+const APP_VERSION = '2026.10.17-8';
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -263,14 +263,55 @@ function makeRelay(s, id, token, fresh, h) {
 }
 
 /** ICE 후보 모으기를 잠깐 기다린다 → 후보를 SDP에 담아 한 번에 보내 중개 서버로 가는 메시지를 줄인다. */
-function waitIce(pc, ms = 2500) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+function waitIce(pc, ms = 3000) {
+  const t0 = Date.now();
+  const end = (why) => dlog('ICE 후보 모으기 ' + why + ' (' + (Date.now() - t0) + 'ms) → 담은 후보 ' + candText(pc.localDescription && pc.localDescription.sdp));
+  if (pc.iceGatheringState === 'complete') { end('완료'); return Promise.resolve(); }
   return new Promise((res) => {
-    const t = setTimeout(done, ms);
-    function done() { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', chk); res(); }
-    function chk() { if (pc.iceGatheringState === 'complete') done(); }
+    const t = setTimeout(() => done('시간 초과'), ms);
+    function done(why) { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', chk); end(why); res(); }
+    function chk() { if (pc.iceGatheringState === 'complete') done('완료'); }
     pc.addEventListener('icegatheringstatechange', chk);
   });
+}
+
+/** SDP(또는 후보 한 줄들) 안의 ICE 후보 종류 세기: host(내 기기)/srflx(공유기 바깥 주소)/relay(TURN 중계). */
+function candCount(text) {
+  const c = { host: 0, srflx: 0, prflx: 0, relay: 0 };
+  for (const m of String(text || '').matchAll(/candidate:\S+ \d+ (\S+) \d+ \S+ \d+ typ (\w+)/g)) c[m[2]] = (c[m[2]] || 0) + 1;
+  return c;
+}
+const candText = (text) => { const c = candCount(text); return 'host ' + c.host + ' · srflx ' + c.srflx + ' · relay ' + c.relay + (c.prflx ? ' · prflx ' + c.prflx : ''); };
+
+/** ICE 진행을 진단 기록에 남긴다: 상태 변화, STUN/TURN 서버 오류, 늦게 온 후보 수, 연결된 경로, 실패 시 원인 힌트. */
+function watchIce(pc, who, s) {
+  const late = { mine: '', theirs: '' };
+  const turn = (s.turnUrl || '').split(',').filter((u) => u.trim()).length;
+  dlog(who + ' ICE 서버: STUN 2개' + (turn ? ' + TURN ' + turn + '개' : ' (TURN 없음)'));
+  pc.addEventListener('icecandidate', (e) => { if (e.candidate && e.candidate.candidate) late.mine += e.candidate.candidate + '\n'; });
+  pc.addEventListener('icecandidateerror', (e) => {
+    // 701 등은 흔한 일시 오류. TURN 주소·비밀번호가 틀리면 여기서 401 등이 보인다.
+    if (e.errorCode === 701 && !/turn/i.test(e.url || '')) return;
+    dlog(who + ' ICE 서버 오류 ' + (e.url || '') + ' ' + e.errorCode + ' ' + (e.errorText || ''));
+  });
+  pc.addEventListener('iceconnectionstatechange', async () => {
+    const st = pc.iceConnectionState;
+    dlog(who + ' ICE 상태 ' + st);
+    if (st === 'connected' || st === 'completed') {
+      try {
+        const r = await pc.getStats(); let pair = null; const c = {};
+        r.forEach((x) => { if (x.type === 'candidate-pair' && (x.selected || x.nominated) && x.state === 'succeeded') pair = x; if (/candidate$/.test(x.type)) c[x.id] = x; });
+        if (pair) { const l = c[pair.localCandidateId] || {}; const rm = c[pair.remoteCandidateId] || {}; dlog(who + ' 연결 경로: 내 ' + l.candidateType + '(' + (l.relayProtocol || l.protocol) + ') ↔ 상대 ' + rm.candidateType + (l.candidateType === 'relay' || rm.candidateType === 'relay' ? ' · TURN 중계' : ' · 직접')); }
+      } catch { /* 통계 없음 */ }
+    } else if (st === 'failed') {
+      const mine = candCount((pc.localDescription && pc.localDescription.sdp) + late.mine);
+      const theirs = candCount(pc.remoteDescription && pc.remoteDescription.sdp);
+      dlog(who + ' 연결 실패 요약: 내 후보 ' + candText((pc.localDescription && pc.localDescription.sdp) + late.mine) + ' / 상대 후보 ' + candText(pc.remoteDescription && pc.remoteDescription.sdp));
+      if (!mine.relay && !theirs.relay) dlog(who + ' → 직접 연결이 막힌 망(5G 등)이에요. 설정에 TURN을 넣으면 해결돼요.');
+      else dlog(who + ' → TURN 후보는 있는데도 실패: TURN 주소·포트(443/TCP 권장)를 확인하세요.');
+    }
+  });
+  return late;
 }
 
 // ---------- 진단 기록(설정 → 진단 보기, 상태 표시 누르기) ----------
@@ -282,11 +323,11 @@ let diagSave = 0;
 function dlog(msg) {
   const d = new Date(); const p = (n, w = 2) => String(n).padStart(w, '0');
   diag.push(p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3) + ' ' + msg);
-  if (diag.length > 60) diag.splice(0, diag.length - 60);
+  if (diag.length > 120) diag.splice(0, diag.length - 120);
   clearTimeout(diagSave); diagSave = setTimeout(() => writeJSON(KEY_DIAG, diag), 300);
   if (!$('#diagSheet').hidden) $('#diagLog').textContent = diagText();
 }
-const diagText = () => diag.slice(-20).join('\n');
+const diagText = () => diag.slice(-40).join('\n');
 function openDiag() {
   const ua = navigator.userAgent.replace(/^Mozilla\/5\.0 /, '');
   $('#diagLog').textContent = diagText() || '(기록 없음)';
@@ -452,17 +493,19 @@ async function onCamSignal(m) {
 }
 
 function addCandidate(ss, c) {
+  dlog('[카메라] 늦게 온 상대 후보: ' + ((/typ (\w+)/.exec(c.candidate || '') || [])[1] || '?'));
   if (ss.pc.remoteDescription) ss.pc.addIceCandidate(c).catch(() => {}); else ss.pending.push(c);
 }
 
 async function camSession(peer, sid, sdp) {
   const pc = new RTCPeerConnection(rtcConfig(cam.s));
+  watchIce(pc, '[카메라]', cam.s);
   const dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
   dc.binaryType = 'arraybuffer';
   const ss = { sid, peer, pc, dc, authed: false, nonce: '', pending: [], audio: null, ended: false };
   cam.sessions.set(sid, ss);
   ss.timer = setTimeout(() => { if (!ss.authed) endCam(ss); }, AUTH_TIMEOUT);
-  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && cam.sig) cam.sig.send('CANDIDATE', peer, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
+  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && cam.sig) dlog('[카메라] 늦게 나온 내 후보 보냄: ' + ((/typ (\w+)/.exec(e.candidate.candidate) || [])[1] || '?')), cam.sig.send('CANDIDATE', peer, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
   pc.onconnectionstatechange = () => { dlog('[카메라] 연결 상태 ' + pc.connectionState); if (['failed', 'closed'].includes(pc.connectionState)) endCam(ss); else if (pc.connectionState === 'connected' && ss.authed) tuneSenders(pc); };
   pc.ontrack = (e) => {
     if (!ss.authed || e.track.kind !== 'audio') return;
@@ -473,6 +516,7 @@ async function camSession(peer, sid, sdp) {
   dc.onopen = () => { ss.nonce = b64u(rand(32)); sendJSON(dc, { t: 'hello', v: 1, n: ss.nonce }); };
   dc.onmessage = (e) => onCamData(ss, e.data).catch(() => endCam(ss));
   dc.onclose = () => endCam(ss);
+  dlog('[카메라] 받은 신청의 후보: ' + candText(sdp));
   await pc.setRemoteDescription({ type: 'offer', sdp });
   dlog('연결 요청 받음 ← ' + peer.slice(0, 6) + '…');
   await pc.setLocalDescription(await pc.createAnswer());
@@ -806,11 +850,12 @@ async function dial() {
   dlog('[뷰어] 카메라에 연결 시도');
   const camId = view.cam.id; const sid = 'dc_' + rtok(); // 공식 DataConnection ID 모양
   const pc = new RTCPeerConnection(rtcConfig(view.s));
+  watchIce(pc, '[뷰어]', view.s);
   const dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
   dc.binaryType = 'arraybuffer';
   const ss = { sid, pc, dc, pending: [], authed: false };
   view.ss = ss;
-  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && view.sig) view.sig.send('CANDIDATE', camId, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
+  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && view.sig) dlog('[뷰어] 늦게 나온 내 후보 보냄: ' + ((/typ (\w+)/.exec(e.candidate.candidate) || [])[1] || '?')), view.sig.send('CANDIDATE', camId, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
   pc.onconnectionstatechange = () => {
     if (view.ss !== ss) return;
     const st = pc.connectionState;
@@ -846,8 +891,10 @@ function onViewSignal(m) {
   if (m.type === 'ANSWER' && typeof sdp === 'string' && !ss.answered) {
     ss.answered = true; // 같은 답이 여러 길로 거의 동시에 오므로 첫 답만(비동기 적용 중 두 번째가 오면 오류가 남)
     if (/^m=(audio|video)/m.test(sdp)) return redial(3000);
+    dlog('[뷰어] 받은 답의 후보: ' + candText(sdp));
     ss.pc.setRemoteDescription({ type: 'answer', sdp }).then(() => ss.pending.splice(0).forEach((c) => ss.pc.addIceCandidate(c).catch(() => {}))).catch(() => redial(3000));
   } else if (m.type === 'CANDIDATE' && p.candidate) {
+    dlog('[뷰어] 늦게 온 상대 후보: ' + ((/typ (\w+)/.exec(p.candidate.candidate || '') || [])[1] || '?'));
     if (ss.pc.remoteDescription) ss.pc.addIceCandidate(p.candidate).catch(() => {}); else ss.pending.push(p.candidate);
   }
 }
