@@ -33,7 +33,8 @@
   <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
   <symbol id="i-shot" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L5 14h6l-1 8 8-12h-6z"/></symbol>
-  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8 3v3M16 3v3M8 18v3M16 18v3"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
@@ -170,7 +171,7 @@
 <section id="view" class="stage" hidden>
   <video id="viewVideo" playsinline autoplay></video>
   <div class="hud top">
-    <div class="pill"><span id="viewDot" class="dot"></span><span id="viewStatus">준비 중…</span></div>
+    <div class="row-pills"><div class="pill"><span id="viewDot" class="dot"></span><span id="viewStatus">준비 중…</span></div><span id="viewRoute" class="route" hidden></span></div>
     <div id="viewStats" class="stats"></div>
   </div>
   <div class="hud bottom">
@@ -179,7 +180,8 @@
     <button id="vPhoto" class="ctl"><span class="disc"><svg class="ic"><use href="#i-shot"/></svg></span>사진</button>
     <button id="vFlip" class="ctl"><span class="disc"><svg class="ic"><use href="#i-flip"/></svg></span>전환</button>
     <button id="vTorch" class="ctl" hidden><span class="disc"><svg class="ic"><use href="#i-bolt"/></svg></span>플래시</button>
-    <button id="vFit" class="ctl"><span class="disc"><svg class="ic"><use href="#i-fit"/></svg></span>맞춤</button>
+    <button id="vFit" class="ctl"><span class="disc"><svg class="ic"><use href="#i-fit"/></svg></span><span>맞춤</span></button>
+    <button id="vFull" class="ctl"><span class="disc"><svg class="ic"><use href="#i-full"/></svg></span><span>전체화면</span></button>
     <button id="vStop" class="ctl end"><span class="disc"><svg class="ic"><use href="#i-x"/></svg></span>끝</button>
   </div>
 </section>

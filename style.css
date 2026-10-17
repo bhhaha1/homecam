@@ -91,7 +91,15 @@ details[open] > summary::after { transform: rotate(90deg); }
 .empty { text-align: center; padding: 28px 16px; color: var(--muted); }
 
 /* 영상 화면(카메라·뷰어) */
-.stage { position: fixed; inset: 0; background: #000; color: #fff; }
+.stage { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; background: #000; color: #fff; overflow: hidden; }
+/* 전체화면(Fullscreen API) 또는 몰입 모드: 영상만 */
+#view:fullscreen, #view:-webkit-full-screen { width: 100%; height: 100%; }
+#view.immersive .hud { opacity: 0; pointer-events: none; }
+.row-pills { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.route { padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: var(--glass); border: 1px solid var(--glass-line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); white-space: nowrap; }
+.route.relay { color: var(--warn); }
+.route.direct { color: var(--ok); }
+@media (orientation: landscape) and (max-height: 500px) { .hud.top { padding-top: calc(8px + env(safe-area-inset-top)); } .hud.bottom { padding-bottom: calc(8px + env(safe-area-inset-bottom)); } .ctl .disc { width: 46px; height: 46px; } .ctl { width: 52px; font-size: 11px; } }
 .stage video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
 #view video { object-fit: cover; }
 #view video.contain { object-fit: contain; }
@@ -102,8 +110,8 @@ details[open] > summary::after { transform: rotate(90deg); }
 .stage.idle .hud { opacity: 0; pointer-events: none; }
 .stage.idle .hud.top { transform: translateY(-8px); }
 .stage.idle .hud.bottom { transform: translateY(8px); }
-.ctl { flex-direction: column; gap: 4px; min-height: 0; padding: 0; background: transparent; color: #fff; font-size: 12px; font-weight: 600; width: 56px; text-shadow: 0 1px 3px #000; }
-.ctl .disc { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; background: var(--glass); border: 1px solid var(--glass-line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background .2s; }
+.ctl { flex-direction: column; gap: 4px; min-height: 0; padding: 0; background: transparent; color: #fff; font-size: 12px; font-weight: 600; width: min(56px, 13.4vw); text-shadow: 0 1px 3px #000; white-space: nowrap; }
+.ctl .disc { width: min(54px, 12vw); height: min(54px, 12vw); border-radius: 50%; display: grid; place-items: center; background: var(--glass); border: 1px solid var(--glass-line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background .2s; }
 .ctl.on .disc { background: #fff; color: #111; }
 .ctl.end .disc { background: var(--bad); border-color: transparent; }
 .ctl.on.talk .disc { background: var(--ok); color: #fff; }
@@ -116,7 +124,8 @@ details[open] > summary::after { transform: rotate(90deg); }
 .dot.bad { background: var(--bad); animation: none; }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
-.stats { font: 11px/1.3 ui-monospace, Menlo, monospace; color: rgb(255 255 255 / .75); text-align: right; text-shadow: 0 1px 2px #000; }
+.hud.top { align-items: flex-start; }
+.stats { max-width: 42vw; font: 11px/1.3 ui-monospace, Menlo, monospace; color: rgb(255 255 255 / .75); text-align: right; text-shadow: 0 1px 2px #000; }
 
 /* 절전 화면 */
 #dim { position: fixed; inset: 0; background: #000; z-index: 10; color: #4a4f5a; font-size: 13px; }

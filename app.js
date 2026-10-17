@@ -9,7 +9,7 @@
 'use strict';
 
 /** 앱 버전. 진단 기록·설정에 보여서 두 폰이 같은 버전인지 확인한다(배포 때마다 올림). */
-const APP_VERSION = '2026.10.17-8';
+const APP_VERSION = '2026.10.17-9';
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -284,7 +284,7 @@ function candCount(text) {
 const candText = (text) => { const c = candCount(text); return 'host ' + c.host + ' · srflx ' + c.srflx + ' · relay ' + c.relay + (c.prflx ? ' · prflx ' + c.prflx : ''); };
 
 /** ICE 진행을 진단 기록에 남긴다: 상태 변화, STUN/TURN 서버 오류, 늦게 온 후보 수, 연결된 경로, 실패 시 원인 힌트. */
-function watchIce(pc, who, s) {
+function watchIce(pc, who, s, onRoute) {
   const late = { mine: '', theirs: '' };
   const turn = (s.turnUrl || '').split(',').filter((u) => u.trim()).length;
   dlog(who + ' ICE 서버: STUN 2개' + (turn ? ' + TURN ' + turn + '개' : ' (TURN 없음)'));
@@ -301,7 +301,12 @@ function watchIce(pc, who, s) {
       try {
         const r = await pc.getStats(); let pair = null; const c = {};
         r.forEach((x) => { if (x.type === 'candidate-pair' && (x.selected || x.nominated) && x.state === 'succeeded') pair = x; if (/candidate$/.test(x.type)) c[x.id] = x; });
-        if (pair) { const l = c[pair.localCandidateId] || {}; const rm = c[pair.remoteCandidateId] || {}; dlog(who + ' 연결 경로: 내 ' + l.candidateType + '(' + (l.relayProtocol || l.protocol) + ') ↔ 상대 ' + rm.candidateType + (l.candidateType === 'relay' || rm.candidateType === 'relay' ? ' · TURN 중계' : ' · 직접')); }
+        if (pair) {
+          const l = c[pair.localCandidateId] || {}; const rm = c[pair.remoteCandidateId] || {};
+          const relay = l.candidateType === 'relay' || rm.candidateType === 'relay';
+          dlog(who + ' 연결 경로: 내 ' + l.candidateType + '(' + (l.relayProtocol || l.protocol) + ') ↔ 상대 ' + rm.candidateType + (relay ? ' · TURN 중계' : ' · 직접'));
+          if (onRoute) onRoute(relay);
+        }
       } catch { /* 통계 없음 */ }
     } else if (st === 'failed') {
       const mine = candCount((pc.localDescription && pc.localDescription.sdp) + late.mine);
@@ -845,12 +850,12 @@ function redial(ms, text) {
 async function dial() {
   if (!view.active) return;
   clearTimeout(view.timer); hangup();
-  view.gotVideo = false;
+  view.gotVideo = false; $('#viewRoute').hidden = true;
   setStatus('view', '카메라에 연결 중…');
   dlog('[뷰어] 카메라에 연결 시도');
   const camId = view.cam.id; const sid = 'dc_' + rtok(); // 공식 DataConnection ID 모양
   const pc = new RTCPeerConnection(rtcConfig(view.s));
-  watchIce(pc, '[뷰어]', view.s);
+  watchIce(pc, '[뷰어]', view.s, (relay) => { if (view.ss && view.ss.pc === pc) showRoute(relay); });
   const dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
   dc.binaryType = 'arraybuffer';
   const ss = { sid, pc, dc, pending: [], authed: false };
@@ -964,13 +969,40 @@ async function viewStatsLoop() {
   while (view.active) {
     let text = '';
     const ss = view.ss;
-    if (ss && ss.authed) { try { const r = await readStats(ss.pc, 'in', prev); prev = r.prev; text = r.text; } catch { /* 닫히는 중 */ } }
+    if (ss && ss.authed) { try { const r = await readStats(ss.pc, 'in', prev); prev = r.prev; text = r.text.replace(/ · (직접|중계)$/, ''); } catch { /* 닫히는 중 */ } } // 경로는 옆 배지에
     const i = view.info;
     if (i && i.battery != null) text += ' · 🔋' + i.battery + '%' + (i.charging ? '⚡' : '');
     $('#viewStats').textContent = text;
     await sleep(2000);
   }
 }
+
+/** 연결 경로 표시: 직접 / 중계(TURN). */
+function showRoute(relay) {
+  const r = $('#viewRoute'); r.hidden = false;
+  r.textContent = relay ? '중계(TURN)' : '직접';
+  r.className = 'route ' + (relay ? 'relay' : 'direct');
+}
+
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+/** 전체화면: Fullscreen API가 되면 그것으로, 안 되는 곳(아이폰 Safari)은 버튼·상단을 숨기는 몰입 모드 + 홈 화면 추가 안내. */
+async function toggleFull() {
+  const v = $('#view');
+  const canFs = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+  if (canFs) {
+    try {
+      if (fsElement()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      else await (v.requestFullscreen || v.webkitRequestFullscreen).call(v, { navigationUI: 'hide' });
+    } catch { /* 사용자가 막음 */ }
+  } else {
+    const on = v.classList.toggle('immersive');
+    if (on && !isStandalone()) toast('홈 화면에 추가해서 열면 주소창 없이 꽉 차요 · 다시 두 번 누르면 돌아와요', 4000);
+    else if (on) toast('두 번 누르면 버튼이 돌아와요', 1800);
+  }
+  fullLabel();
+}
+function fullLabel() { const on = !!fsElement() || $('#view').classList.contains('immersive'); setLabel($('#vFull'), on ? '나가기' : '전체화면'); }
 
 function soundBtn() { const v = $('#viewVideo'); setLabel($('#vSound'), v.muted ? '소리 꺼짐' : '소리 켬'); $('#vSound').classList.toggle('on', !v.muted); }
 
@@ -1038,6 +1070,7 @@ function stopViewer() {
   $('#viewVideo').srcObject = null;
   $('#vTalk').classList.remove('on'); setLabel($('#vTalk'), '말하기');
   clearTimeout(hudTimer); $('#view').classList.remove('idle');
+  $('#view').classList.remove('immersive'); $('#viewRoute').hidden = true; if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document).catch(() => {});
   keepAwake(false); show('vhome'); renderCamList();
 }
 
@@ -1100,8 +1133,15 @@ function init() {
   $('#vPhoto').onclick = takePhoto;
   $('#vFlip').onclick = () => cmd({ t: 'flip' });
   $('#vTorch').onclick = () => cmd({ t: 'torch', on: !(view.info && view.info.torchOn) });
-  $('#vFit').onclick = () => { const c = $('#viewVideo').classList.toggle('contain'); toast(c ? '전체 보기' : '꽉 채우기', 1200); };
-  $('#viewVideo').onclick = () => { if ($('#view').classList.contains('idle')) wakeHud(); else { clearTimeout(hudTimer); $('#view').classList.add('idle'); } };
+  $('#vFit').onclick = () => { const c = $('#viewVideo').classList.toggle('contain'); setLabel($('#vFit'), c ? '채우기' : '맞춤'); toast(c ? '잘림 없이 전체 보기' : '화면 꽉 채우기', 1200); };
+  $('#vFull').onclick = toggleFull;
+  // 한 번 누르면 버튼 보이기/숨기기, 두 번 빠르게 누르면 전체화면
+  let tapT = 0;
+  $('#viewVideo').onclick = () => {
+    if (tapT) { clearTimeout(tapT); tapT = 0; toggleFull(); return; }
+    tapT = setTimeout(() => { tapT = 0; if ($('#view').classList.contains('idle')) wakeHud(); else { clearTimeout(hudTimer); $('#view').classList.add('idle'); } }, 260);
+  };
+  document.addEventListener('fullscreenchange', fullLabel); document.addEventListener('webkitfullscreenchange', fullLabel);
   $('#view').querySelector('.hud.bottom').addEventListener('pointerdown', wakeHud);
   $('#photoClose').onclick = () => { $('#photo').hidden = true; };
 
