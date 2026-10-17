@@ -8,6 +8,8 @@
 // 중개 서버는 PeerJS 서버 프로토콜(웹소켓으로 OFFER/ANSWER/CANDIDATE 전달)을 직접 구현해 외부 스크립트가 없다.
 'use strict';
 
+/** 앱 버전. 진단 기록·설정에 보여서 두 폰이 같은 버전인지 확인한다(배포 때마다 올림). */
+const APP_VERSION = '2026.10.17-7';
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -288,7 +290,7 @@ const diagText = () => diag.slice(-20).join('\n');
 function openDiag() {
   const ua = navigator.userAgent.replace(/^Mozilla\/5\.0 /, '');
   $('#diagLog').textContent = diagText() || '(기록 없음)';
-  $('#diagEnv').textContent = '기기: ' + ua.slice(0, 120) + ' · 연결: ' + ((navigator.connection && navigator.connection.effectiveType) || '-') + ' · ' + (navigator.onLine ? '온라인' : '오프라인');
+  $('#diagEnv').textContent = '앱 ' + APP_VERSION + ' · 기기: ' + ua.slice(0, 120) + ' · 연결: ' + ((navigator.connection && navigator.connection.effectiveType) || '-') + ' · ' + (navigator.onLine ? '온라인' : '오프라인');
   $('#diagSheet').hidden = false;
 }
 
@@ -375,7 +377,7 @@ async function getCamera(facing, q, audio) {
 }
 
 async function startCamera() {
-  dlog('— 카메라 시작');
+  dlog('— 카메라 시작 (앱 ' + APP_VERSION + ')');
   const s = readForm();
   if (!checkSecure()) return;
   let base; try { base = signalBase(s); } catch (e) { $('#homeErr').textContent = e.message; return; }
@@ -430,16 +432,17 @@ function noteFail() {
 async function onCamSignal(m) {
   const p = m.payload || {};
   if (m.type === 'OFFER') {
-    if (isBlocked()) return;
-    if ([...cam.sessions.values()].filter((x) => !x.authed).length >= 3) return; // 인증 안 된 연결이 쌓이지 않게
+    if (isBlocked()) { dlog('[카메라] 차단 중이라 연결 신청 무시'); return; }
+    if ([...cam.sessions.values()].filter((x) => !x.authed).length >= 3) { dlog('[카메라] 인증 대기 연결이 많아 신청 무시'); return; } // 인증 안 된 연결이 쌓이지 않게
     // 공식 PeerJS 모양: { sdp: {type, sdp}, type: 'data', connectionId, metadata: {ts, tag}, label, reliable, serialization }
     const sid = p.connectionId; const sdp = p.sdp && p.sdp.type === 'offer' ? p.sdp.sdp : null; const md = p.metadata || {};
-    if (typeof sid !== 'string' || typeof sdp !== 'string' || cam.sessions.has(sid) || cam.seen.has(sid)) return;
-    if (/^m=(audio|video)/m.test(sdp)) return; // 인증 전엔 영상·소리 협상 금지
+    if (typeof sid !== 'string' || typeof sdp !== 'string') { cam.dropped++; dlog('[카메라] 모양이 다른 연결 신청 무시(뷰어 앱이 옛 버전일 수 있음)'); return camStatus(); }
+    if (cam.sessions.has(sid) || cam.seen.has(sid)) return; // 같은 신청이 다른 길로 또 온 것
+    if (/^m=(audio|video)/m.test(sdp)) { dlog('[카메라] 인증 전 영상 협상 시도 무시'); return; } // 인증 전엔 영상·소리 협상 금지
     // 열쇠로 서명한 신청만 받는다(공개 중개 길에서 엿본 사람은 연결 자체를 못 만듦). 같은 신청 재사용·10분 넘은 신청 거부.
     const fresh = typeof md.ts === 'number' && Math.abs(Date.now() - md.ts) < 10 * 60000;
     cam.seen.add(sid); if (cam.seen.size > 300) cam.seen.delete(cam.seen.values().next().value);
-    if (!fresh || !(await hmacVerify(cam.hkey, md.tag, offerText(sid, md.ts, sdp)))) { cam.dropped++; dlog('[카메라] 서명 없는 연결 신청 무시' + (fresh ? '' : '(시각 어긋남)')); camStatus(); return; }
+    if (!fresh || !(await hmacVerify(cam.hkey, md.tag, offerText(sid, md.ts, sdp)))) { cam.dropped++; dlog('[카메라] 서명이 맞지 않는 연결 신청 무시' + (fresh ? '(열쇠가 다름 → 뷰어 재등록 필요?)' : '(두 폰 시각이 10분 넘게 어긋남)')); camStatus(); return; }
     camSession(m.src, sid, sdp).catch(() => {});
   } else if (m.type === 'CANDIDATE') {
     const ss = cam.sessions.get(p.connectionId);
@@ -619,7 +622,7 @@ function sendInfo() {
   const vt = cam.stream.getVideoTracks()[0];
   const st = vt ? vt.getSettings() : {};
   const caps = vt && vt.getCapabilities ? vt.getCapabilities() : {};
-  const info = { t: 'info', facing: cam.facing, w: st.width, h: st.height, quality: cam.s.quality, torch: !!caps.torch, torchOn: cam.torch };
+  const info = { t: 'info', v: APP_VERSION, facing: cam.facing, w: st.width, h: st.height, quality: cam.s.quality, torch: !!caps.torch, torchOn: cam.torch };
   if (cam.battery) { info.battery = Math.round(cam.battery.level * 100); info.charging = cam.battery.charging; }
   for (const ss of cam.sessions.values()) if (ss.authed) sendJSON(ss.dc, info);
 }
@@ -760,7 +763,7 @@ function stopScan() {
 }
 
 async function startViewer(entry) {
-  dlog('— 뷰어 시작');
+  dlog('— 뷰어 시작 (앱 ' + APP_VERSION + ')');
   const s = readForm();
   if (!checkSecure()) return;
   let base; try { base = signalBase(s); } catch (e) { toast(e.message, 4000); return; }
@@ -875,6 +878,7 @@ async function onViewData(ss, raw) {
   } else if (m.t === 'sdp' && m.type === 'answer' && typeof m.sdp === 'string') {
     await ss.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
   } else if (m.t === 'info') {
+    if (m.v !== APP_VERSION && (!view.info || view.info.v !== m.v)) { dlog('[뷰어] 카메라 앱 버전이 달라요: ' + (m.v || '옛 버전')); toast('카메라 폰 앱이 다른 버전이에요. 카메라 폰에서 앱을 껐다 켜 주세요.', 5000); }
     view.info = m;
     $('#vTorch').hidden = !m.torch; $('#vTorch').classList.toggle('on', !!m.torchOn);
     $('#viewVideo').classList.toggle('mirror', m.facing === 'user');
@@ -1064,6 +1068,7 @@ function init() {
   window.addEventListener('pagehide', () => { if (cam.sig) cam.sig.stop(); if (view.sig) view.sig.stop(); });
 
   $('#goDiag').onclick = openDiag;
+  $('#appVer').textContent = '앱 버전 ' + APP_VERSION + ' · 두 폰이 같아야 해요';
   $('#camStatus').parentElement.onclick = openDiag;
   $('#viewStatus').parentElement.onclick = (e) => { e.stopPropagation(); openDiag(); };
   $('#diagClose').onclick = () => { $('#diagSheet').hidden = true; };
