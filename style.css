@@ -145,3 +145,7 @@ details[open] > summary::after { transform: rotate(90deg); }
 #photoInfo { color: rgb(255 255 255 / .65); font-size: 13px; text-align: center; }
 
 .toast { position: fixed; left: 50%; bottom: calc(120px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 30; max-width: 90vw; padding: 10px 16px; border-radius: 999px; background: rgb(20 22 28 / .92); color: #fff; font-size: 14px; text-align: center; box-shadow: var(--shadow); }
+.log { margin: 0; max-height: 46vh; overflow: auto; background: var(--surface-2); border-radius: var(--r-sm); padding: 12px; font: 11px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+.small { font-size: 12px; }
+.pill { cursor: pointer; }
+#diagSheet { z-index: 40; }

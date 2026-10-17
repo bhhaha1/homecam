@@ -92,7 +92,19 @@
       <div class="field"><label for="server">중개 서버 (비우면 PeerJS 무료 서버)</label><input id="server" autocomplete="off" placeholder="https://my-peer-server.example.com/"></div>
     </details>
   </section>
+  <button id="goDiag" class="block">진단 보기 (연결 문제 기록)</button>
 </main>
+
+<!-- 진단 기록 시트 -->
+<div id="diagSheet" class="sheet" hidden>
+  <div class="panel">
+    <div class="row"><h2 class="grow">진단 기록</h2><button id="diagClose" class="icon-btn" aria-label="닫기"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <p class="muted">연결이 안 될 때 이 화면을 캡처하거나 복사해서 보내 주세요. 열쇠는 기록되지 않아요.</p>
+    <pre id="diagLog" class="log"></pre>
+    <p id="diagEnv" class="muted small"></p>
+    <div class="row"><button id="diagCopy" class="primary grow"><svg class="ic"><use href="#i-copy"/></svg>복사</button><button id="diagClear">지우기</button></div>
+  </div>
+</div>
 
 <!-- 3. 뷰어: 카메라 목록 -->
 <main id="vhome" class="screen" hidden>

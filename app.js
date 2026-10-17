@@ -98,36 +98,87 @@ function signalBase(s) {
  * 서버는 {type, src, dst, payload}를 상대에게 그대로 전달만 한다(OPEN, ID-TAKEN, EXPIRE, LEAVE는 서버가 보냄).
  */
 class Signal {
-  constructor(base, id, token, h) { this.base = base; this.id = id; this.token = token; this.h = h; this.fails = 0; this.ready = false; this.stopped = false; }
+  /** fresh=true면 다시 붙을 때마다 새 ID·토큰을 쓴다(뷰어: 서버에 남은 옛 연결과 얽히지 않게). */
+  constructor(base, id, token, h, fresh = false) { this.base = base; this.id = id; this.token = token; this.h = h; this.fresh = fresh; this.fails = 0; this.ready = false; this.stopped = false; this.conns = 0; }
   start() { this.stopped = false; this.connect(); }
   connect() {
-    clearTimeout(this.rt);
+    clearTimeout(this.rt); clearTimeout(this.ot);
+    if (this.fresh && this.conns++) { this.id = 'hv' + hex(rand(16)); this.token = hex(rand(16)); }
     let ws;
-    try { ws = new WebSocket(this.base + '&id=' + this.id + '&token=' + this.token + '&version=1.5.5'); } catch { return this.retry(); }
-    this.ws = ws;
-    ws.onopen = () => { clearInterval(this.hb); this.hb = setInterval(() => this.raw({ type: 'HEARTBEAT' }), 5000); };
+    try { ws = new WebSocket(this.base + '&id=' + this.id + '&token=' + this.token + '&version=1.5.5'); } catch (e) { dlog('서버 주소 오류: ' + e.message); return this.retry(); }
+    this.ws = ws; const t0 = Date.now();
+    dlog('서버 접속 시도 ' + this.base.replace(/^wss?:\/\//, '').split('/')[0] + ' id=' + this.id.slice(0, 6) + '…');
+    ws.onopen = () => {
+      dlog('웹소켓 열림 (' + (Date.now() - t0) + 'ms)');
+      clearInterval(this.hb); this.hb = setInterval(() => this.raw({ type: 'HEARTBEAT' }), 5000);
+      // 같은 ID·토큰으로 다시 붙으면 서버(PeerJS)는 OPEN을 다시 보내지 않는다 → 오류가 없으면 등록된 것으로 본다
+      this.ot = setTimeout(() => { if (this.ws === ws && !this.ready) { dlog('OPEN 없이 2초 경과 → 이미 등록된 연결로 보고 진행'); this.markReady(); } }, 2000);
+    };
     ws.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
       if (!m || typeof m !== 'object') return;
-      if (m.type === 'OPEN') { this.ready = true; this.fails = 0; if (this.h.open) this.h.open(); }
-      else if (m.type === 'ID-TAKEN') { this.stop(); if (this.h.taken) this.h.taken(); }
-      else if (m.type === 'ERROR') { if (this.h.error) this.h.error((m.payload && m.payload.msg) || '서버 오류'); }
-      else this.h.msg(m);
+      if (m.type === 'OPEN') { dlog('서버 등록 완료(OPEN)'); this.markReady(); }
+      else if (m.type === 'ID-TAKEN') { dlog('ID-TAKEN: 다른 기기가 같은 ID 사용'); this.stop(); if (this.h.taken) this.h.taken(); }
+      else if (m.type === 'ERROR') { const msg = (m.payload && m.payload.msg) || '서버 오류'; dlog('서버 ERROR: ' + msg); if (this.h.error) this.h.error(msg); }
+      else { if (m.type !== 'CANDIDATE') dlog('받음 ' + m.type + (m.src ? ' ← ' + String(m.src).slice(0, 6) + '…' : '')); this.h.msg(m); }
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       if (this.ws !== ws) return;
-      this.ready = false; clearInterval(this.hb);
-      if (this.h.down) this.h.down();
+      dlog('웹소켓 닫힘 code=' + e.code + (e.reason ? ' reason=' + e.reason : '') + ' clean=' + e.wasClean + ' (' + Math.round((Date.now() - t0) / 100) / 10 + '초 유지)');
+      this.ready = false; this.lastCode = e.code; clearInterval(this.hb); clearTimeout(this.ot);
+      if (this.h.down) this.h.down(e.code);
       if (!this.stopped) this.retry();
     };
-    ws.onerror = () => {};
+    ws.onerror = () => dlog('웹소켓 오류 이벤트');
   }
-  retry() { clearTimeout(this.rt); this.rt = setTimeout(() => this.connect(), Math.min(30000, 1000 * 2 ** Math.min(this.fails++, 5))); }
+  markReady() { if (this.ready) return; clearTimeout(this.ot); this.ready = true; this.fails = 0; if (this.h.open) this.h.open(); }
+  retry() {
+    clearTimeout(this.rt);
+    const wait = Math.min(30000, 1000 * 2 ** Math.min(this.fails++, 5));
+    dlog(Math.round(wait / 1000) + '초 뒤 다시 접속');
+    this.rt = setTimeout(() => this.connect(), wait);
+  }
   raw(o) { if (this.ws && this.ws.readyState === 1) { this.ws.send(JSON.stringify(o)); return true; } return false; }
-  send(type, dst, payload) { return this.raw({ type, dst, payload }); }
+  send(type, dst, payload) {
+    const ok = this.raw({ type, dst, payload });
+    if (type !== 'CANDIDATE') dlog((ok ? '보냄 ' : '보내기 실패(소켓 닫힘) ') + type + ' → ' + String(dst).slice(0, 6) + '… ' + JSON.stringify(payload || {}).length + 'B');
+    return ok;
+  }
   /** 네트워크가 돌아왔을 때 기다리지 말고 바로 다시 붙기 */
   kick() { if (!this.stopped && (!this.ws || this.ws.readyState > 1)) { this.fails = 0; this.connect(); } }
-  stop() { this.stopped = true; this.ready = false; clearTimeout(this.rt); clearInterval(this.hb); const ws = this.ws; this.ws = null; if (ws) ws.close(); }
+  stop() { this.stopped = true; this.ready = false; clearTimeout(this.rt); clearTimeout(this.ot); clearInterval(this.hb); const ws = this.ws; this.ws = null; if (ws) ws.close(); }
+}
+
+/** ICE 후보 모으기를 잠깐 기다린다 → 후보를 SDP에 담아 한 번에 보내 중개 서버로 가는 메시지를 줄인다. */
+function waitIce(pc, ms = 2500) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((res) => {
+    const t = setTimeout(done, ms);
+    function done() { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', chk); res(); }
+    function chk() { if (pc.iceGatheringState === 'complete') done(); }
+    pc.addEventListener('icegatheringstatechange', chk);
+  });
+}
+
+// ---------- 진단 기록(설정 → 진단 보기, 상태 표시 누르기) ----------
+
+const KEY_DIAG = 'homecam.diag.v1';
+const diag = readJSON(KEY_DIAG, []);
+let diagSave = 0;
+/** 최근 이벤트 한 줄 기록. 열쇠·토큰은 절대 넣지 않는다(ID도 앞 6자만). */
+function dlog(msg) {
+  const d = new Date(); const p = (n, w = 2) => String(n).padStart(w, '0');
+  diag.push(p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) + '.' + p(d.getMilliseconds(), 3) + ' ' + msg);
+  if (diag.length > 60) diag.splice(0, diag.length - 60);
+  clearTimeout(diagSave); diagSave = setTimeout(() => writeJSON(KEY_DIAG, diag), 300);
+  if (!$('#diagSheet').hidden) $('#diagLog').textContent = diagText();
+}
+const diagText = () => diag.slice(-20).join('\n');
+function openDiag() {
+  const ua = navigator.userAgent.replace(/^Mozilla\/5\.0 /, '');
+  $('#diagLog').textContent = diagText() || '(기록 없음)';
+  $('#diagEnv').textContent = '기기: ' + ua.slice(0, 120) + ' · 연결: ' + ((navigator.connection && navigator.connection.effectiveType) || '-') + ' · ' + (navigator.onLine ? '온라인' : '오프라인');
+  $('#diagSheet').hidden = false;
 }
 
 // ---------- 공통 화면 도우미 ----------
@@ -208,6 +259,7 @@ async function getCamera(facing, q, audio) {
 }
 
 async function startCamera() {
+  dlog('— 카메라 시작');
   const s = readForm();
   if (!checkSecure()) return;
   let base; try { base = signalBase(s); } catch (e) { $('#homeErr').textContent = e.message; return; }
@@ -230,7 +282,7 @@ function connectCamSignal(base) {
   cam.sig = new Signal(base, cam.pair.id, cam.pair.token, {
     open: camStatus,
     msg: onCamSignal,
-    down: () => setStatus('cam', '서버와 끊김 · 다시 연결 중…', 'bad'),
+    down: (code) => setStatus('cam', '서버와 끊김(' + code + ') · 다시 연결 중…', 'bad'),
     taken: () => setStatus('cam', '이 카메라 ID를 다른 기기가 쓰고 있어요 · 페어링 초기화를 해 주세요', 'bad'),
     error: (msg) => setStatus('cam', '서버 오류: ' + msg, 'bad'),
   });
@@ -286,8 +338,8 @@ async function camSession(peer, sid, sdp) {
   const ss = { sid, peer, pc, dc, authed: false, nonce: '', pending: [], audio: null, ended: false };
   cam.sessions.set(sid, ss);
   ss.timer = setTimeout(() => { if (!ss.authed) endCam(ss); }, AUTH_TIMEOUT);
-  pc.onicecandidate = (e) => { if (e.candidate && cam.sig) cam.sig.send('CANDIDATE', peer, { sid, c: e.candidate.toJSON() }); };
-  pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) endCam(ss); else if (pc.connectionState === 'connected' && ss.authed) tuneSenders(pc); };
+  pc.onicecandidate = (e) => { if (e.candidate && ss.sent && cam.sig) cam.sig.send('CANDIDATE', peer, { sid, c: e.candidate.toJSON() }); }; // 늦게 나온 후보만 따로
+  pc.onconnectionstatechange = () => { dlog('[카메라] 연결 상태 ' + pc.connectionState); if (['failed', 'closed'].includes(pc.connectionState)) endCam(ss); else if (pc.connectionState === 'connected' && ss.authed) tuneSenders(pc); };
   pc.ontrack = (e) => {
     if (!ss.authed || e.track.kind !== 'audio') return;
     // 뷰어 목소리(말하기). 처음엔 빈 트랙.
@@ -298,8 +350,11 @@ async function camSession(peer, sid, sdp) {
   dc.onmessage = (e) => onCamData(ss, e.data).catch(() => endCam(ss));
   dc.onclose = () => endCam(ss);
   await pc.setRemoteDescription({ type: 'offer', sdp });
+  dlog('연결 요청 받음 ← ' + peer.slice(0, 6) + '…');
   await pc.setLocalDescription(await pc.createAnswer());
-  cam.sig.send('ANSWER', peer, { sid, sdp: pc.localDescription.sdp });
+  await waitIce(pc);
+  ss.sent = true;
+  if (cam.sig) cam.sig.send('ANSWER', peer, { sid, sdp: pc.localDescription.sdp });
   ss.pending.splice(0).forEach((c) => pc.addIceCandidate(c).catch(() => {}));
 }
 
@@ -326,8 +381,9 @@ async function onCamData(ss, raw) {
     if (m.t !== 'auth' || !ss.nonce || ss.tried || typeof m.n !== 'string' || m.n.length < 40) return endCam(ss);
     ss.tried = true; // 연결 하나당 한 번만 시도
     const ok = await hmacVerify(cam.hkey, m.mac, authText('viewer', ss.nonce, m.n, fpV, fpC));
+    dlog('[카메라] 인증 ' + (ok ? '통과' : '실패'));
     if (!ok) { noteFail(); sendJSON(ss.dc, { t: 'deny', why: 'auth' }); setTimeout(() => endCam(ss), 300); return; }
-    if (authedCount() >= (Number(cam.s.maxViewers) || 1)) { sendJSON(ss.dc, { t: 'deny', why: 'busy' }); setTimeout(() => endCam(ss), 300); return; }
+    if (authedCount() >= (Number(cam.s.maxViewers) || 1)) { dlog('[카메라] 뷰어 수 초과로 거절'); sendJSON(ss.dc, { t: 'deny', why: 'busy' }); setTimeout(() => endCam(ss), 300); return; }
     ss.authed = true; ss.fpV = fpV; clearTimeout(ss.timer);
     sendJSON(ss.dc, { t: 'ok', mac: await hmacSign(cam.hkey, authText('camera', ss.nonce, m.n, fpV, fpC)) });
     toast('새 뷰어가 연결됐어요 (' + authedCount() + '/' + cam.s.maxViewers + ')', 4000);
@@ -581,6 +637,7 @@ function stopScan() {
 }
 
 async function startViewer(entry) {
+  dlog('— 뷰어 시작');
   const s = readForm();
   if (!checkSecure()) return;
   let base; try { base = signalBase(s); } catch (e) { toast(e.message, 4000); return; }
@@ -591,9 +648,9 @@ async function startViewer(entry) {
   view.sig = new Signal(base, 'hv' + hex(rand(16)), hex(rand(16)), {
     open: () => dial(),
     msg: onViewSignal,
-    down: () => { if (!view.gotVideo) setStatus('view', '서버와 끊김 · 다시 연결 중…', 'bad'); },
+    down: (code) => { if (!view.gotVideo) setStatus('view', '서버와 끊김(' + code + ') · 다시 연결 중…', 'bad'); },
     error: (msg) => setStatus('view', '서버 오류: ' + msg, 'bad'),
-  });
+  }, true);
   view.sig.start();
   viewStatsLoop();
 }
@@ -608,7 +665,7 @@ function hangup() {
 
 function redial(ms, text) {
   if (!view.active) return;
-  if (text) setStatus('view', text, 'bad');
+  if (text) { setStatus('view', text, 'bad'); dlog('[뷰어] ' + text); }
   clearTimeout(view.timer);
   view.timer = setTimeout(() => { if (view.sig && view.sig.ready) dial(); else if (view.sig) view.sig.kick(); }, ms);
 }
@@ -619,16 +676,18 @@ async function dial() {
   clearTimeout(view.timer); hangup();
   view.gotVideo = false;
   setStatus('view', '카메라에 연결 중…');
+  dlog('[뷰어] 카메라에 연결 시도');
   const camId = view.cam.id; const sid = hex(rand(8));
   const pc = new RTCPeerConnection(rtcConfig(view.s));
   const dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
   dc.binaryType = 'arraybuffer';
   const ss = { sid, pc, dc, pending: [], authed: false };
   view.ss = ss;
-  pc.onicecandidate = (e) => { if (e.candidate && view.sig) view.sig.send('CANDIDATE', camId, { sid, c: e.candidate.toJSON() }); };
+  pc.onicecandidate = (e) => { if (e.candidate && ss.sent && view.sig) view.sig.send('CANDIDATE', camId, { sid, c: e.candidate.toJSON() }); }; // 늦게 나온 후보만 따로
   pc.onconnectionstatechange = () => {
     if (view.ss !== ss) return;
     const st = pc.connectionState;
+    dlog('[뷰어] 연결 상태 ' + st);
     if (st === 'failed') redial(3000, '연결 실패 · TURN 설정이 필요할 수 있어요 · 다시 시도');
     else if (st === 'disconnected') {
       setStatus('view', '신호 약함 · 기다리는 중…', 'bad');
@@ -636,10 +695,14 @@ async function dial() {
     } else if (st === 'connected') { clearTimeout(ss.lost); if (view.gotVideo) setStatus('view', '연결됨', 'ok'); }
   };
   dc.onmessage = (e) => onViewData(ss, e.data).catch(() => {});
-  dc.onclose = () => { if (view.ss === ss) redial(1500, '카메라와 끊김 · 다시 연결 중…'); };
+  dc.onopen = () => dlog('[뷰어] 명령 채널 열림');
+  dc.onclose = () => { if (view.ss === ss) dlog('[뷰어] 명령 채널 닫힘'); if (view.ss === ss) redial(1500, '카메라와 끊김 · 다시 연결 중…'); };
   ss.timer = setTimeout(() => { if (view.ss === ss && !ss.authed) redial(1000, '응답 없음 · 다시 시도'); }, 20000);
   await pc.setLocalDescription(await pc.createOffer());
-  view.sig.send('OFFER', camId, { sid, sdp: pc.localDescription.sdp });
+  await waitIce(pc);
+  if (view.ss !== ss || !view.sig) return;
+  ss.sent = true;
+  if (!view.sig.send('OFFER', camId, { sid, sdp: pc.localDescription.sdp })) redial(1000);
 }
 
 function onViewSignal(m) {
@@ -664,14 +727,15 @@ async function onViewData(ss, raw) {
   const fpV = fpOf(ss.pc.localDescription && ss.pc.localDescription.sdp);
   const fpC = fpOf(ss.pc.remoteDescription && ss.pc.remoteDescription.sdp);
   if (m.t === 'hello' && typeof m.n === 'string' && m.n.length >= 40 && !ss.nV) {
-    ss.nC = m.n; ss.nV = b64u(rand(32));
+    ss.nC = m.n; ss.nV = b64u(rand(32)); dlog('[뷰어] 카메라 문제 받음 → 답 보냄');
     sendJSON(ss.dc, { t: 'auth', n: ss.nV, mac: await hmacSign(view.hkey, authText('viewer', ss.nC, ss.nV, fpV, fpC)) });
   } else if (m.t === 'ok' && ss.nV && !ss.authed) {
     // 카메라도 같은 열쇠를 가졌는지 확인(가짜 카메라·중간자 차단)
     if (!(await hmacVerify(view.hkey, m.mac, authText('camera', ss.nC, ss.nV, fpV, fpC)))) { hangup(); return redial(15000, '카메라 확인 실패(위조 의심) · 잠시 뒤 다시 시도'); }
-    ss.authed = true; clearTimeout(ss.timer);
+    ss.authed = true; clearTimeout(ss.timer); dlog('[뷰어] 서로 인증 완료 → 영상 요청');
     await startMedia(ss);
   } else if (m.t === 'deny') {
+    dlog('[뷰어] 거절됨: ' + m.why);
     hangup();
     if (m.why === 'auth') { clearTimeout(view.timer); setStatus('view', '등록이 무효예요. 카메라에서 페어링을 초기화했다면 다시 등록하세요.', 'bad'); }
     else if (m.why === 'busy') redial(10000, '다른 뷰어가 보는 중이에요 · 잠시 뒤 다시 시도');
@@ -702,7 +766,7 @@ async function startMedia(ss) {
   v.srcObject = new MediaStream([vt.receiver.track, at.receiver.track]);
   v.onloadeddata = () => {
     if (view.ss !== ss) return;
-    view.gotVideo = true; setStatus('view', '연결됨', 'ok'); wakeHud();
+    view.gotVideo = true; setStatus('view', '연결됨', 'ok'); wakeHud(); dlog('[뷰어] 영상 수신 시작');
     v.play().catch(() => { v.muted = true; v.play().catch(() => {}); soundBtn(); });
     soundBtn();
   };
@@ -868,6 +932,13 @@ function init() {
   window.addEventListener('online', () => { if (cam.active) camWatchdog(); if (view.active) { if (view.sig) view.sig.kick(); if (!view.gotVideo) redial(500); } });
   // 앱을 닫을 때 중개 서버 연결을 바로 끊어 상대가 빨리 알게 한다
   window.addEventListener('pagehide', () => { if (cam.sig) cam.sig.stop(); if (view.sig) view.sig.stop(); });
+
+  $('#goDiag').onclick = openDiag;
+  $('#camStatus').parentElement.onclick = openDiag;
+  $('#viewStatus').parentElement.onclick = (e) => { e.stopPropagation(); openDiag(); };
+  $('#diagClose').onclick = () => { $('#diagSheet').hidden = true; };
+  $('#diagCopy').onclick = () => navigator.clipboard.writeText($('#diagEnv').textContent + '\n' + diagText()).then(() => toast('복사했어요')).catch(() => toast('길게 눌러 복사하거나 화면을 캡처하세요'));
+  $('#diagClear').onclick = () => { diag.length = 0; writeJSON(KEY_DIAG, diag); $('#diagLog').textContent = '(기록 없음)'; };
 
   takePairFromLink();
   window.addEventListener('hashchange', takePairFromLink);
