@@ -71,14 +71,24 @@
         <label><input type="radio" name="quality" value="high">1080p</label>
         <label><input type="radio" name="quality" value="mid">720p</label>
         <label><input type="radio" name="quality" value="low">480p</label>
+        <label><input type="radio" name="quality" value="save">절전</label>
       </div>
-      <small>1080p 권장. 4K는 배터리·발열이 커요. 끊기면 낮추세요.</small>
+      <small>1080p 권장. 4K는 배터리·발열이 아주 커요. 절전은 720p·15fps·낮은 전송량으로 배터리를 아껴요.</small>
     </div>
     <div class="field"><label>동시에 볼 수 있는 뷰어</label>
       <div class="seg">
         <label><input type="radio" name="maxViewers" value="1">1명</label>
         <label><input type="radio" name="maxViewers" value="2">2명</label>
       </div>
+    </div>
+    <div class="field"><label>뷰어 없을 때 카메라 끄기 (배터리 절약)</label>
+      <div class="seg">
+        <label><input type="radio" name="camIdle" value="0">바로</label>
+        <label><input type="radio" name="camIdle" value="60">1분</label>
+        <label><input type="radio" name="camIdle" value="300">5분</label>
+        <label><input type="radio" name="camIdle" value="never">안 끔</label>
+      </div>
+      <small>뷰어가 접속하면 2~3초 안에 다시 켜져요. 아이폰은 Safari 설정에서 이 사이트의 카메라·마이크를 "허용"으로 해 두세요.</small>
     </div>
     <div class="field"><label class="switch"><span>집 안 소리 보내기</span><input id="audio" type="checkbox"></label></div>
     <div class="field"><label class="switch"><span>30초 뒤 화면 어둡게</span><input id="autoDim" type="checkbox"></label></div>
@@ -100,6 +110,9 @@
       </div>
       <small>뷰어 폰에서만 처리해요(카메라 폰 배터리 영향 없음). 너무 어두운 방은 작은 취침등 하나가 가장 효과적이에요.</small>
     </div>
+    <div class="field"><label class="switch"><span>강한 야간 (프레임 쌓기)</span><input id="nightStrong" type="checkbox"></label>
+      <small>움직이지 않는 곳은 여러 장면을 쌓아 노이즈를 줄이고 더 밝게 해요. 움직이는 곳은 바로 끊어 잔상이 없어요. 뷰어 폰 발열·배터리가 늘어요.</small></div>
+    <div class="field"><label class="switch"><span>보정 처리 15fps로 제한 (발열 줄이기)</span><input id="nightFps15" type="checkbox"></label></div>
     <div class="field"><label class="switch"><span>사진 저장할 때 보정본으로</span><input id="nightSnap" type="checkbox"></label></div>
   </section>
   <section class="card">
@@ -153,6 +166,7 @@
 <!-- 5. 카메라(A) 화면 -->
 <section id="cam" class="stage" hidden>
   <video id="camVideo" playsinline muted autoplay></video>
+  <div id="camStandby" class="standby" hidden><svg class="ic lg"><use href="#i-moon"/></svg><b>대기 모드</b><span>뷰어가 없어 카메라를 껐어요<br>뷰어가 접속하면 바로 켜져요</span></div>
   <div class="hud top">
     <div class="pill"><span id="camDot" class="dot"></span><span id="camStatus">준비 중…</span></div>
     <div id="camStats" class="stats"></div>

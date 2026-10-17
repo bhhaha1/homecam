@@ -9,7 +9,7 @@
 'use strict';
 
 /** 앱 버전. 진단 기록·설정에 보여서 두 폰이 같은 버전인지 확인한다(배포 때마다 올림). */
-const APP_VERSION = '2026.10.18-10';
+const APP_VERSION = '2026.10.18-11';
 const $ = (s) => document.querySelector(s);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,9 +19,10 @@ const QUALITY = {
   high: { w: 1920, h: 1080, fps: 30, kbps: 6000 },
   mid: { w: 1280, h: 720, fps: 30, kbps: 2500 },
   low: { w: 640, h: 480, fps: 20, kbps: 800 },
+  save: { w: 1280, h: 720, fps: 15, kbps: 900 }, // 절전: 인코딩·전송량을 줄여 배터리·발열을 낮춤
 };
 const STUN = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
-const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '', brokers: '', night: 'auto', nightLevel: 'mid', nightSnap: true };
+const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '', brokers: '', camIdle: '60', night: 'auto', nightStrong: false, nightFps15: true, nightLevel: 'mid', nightSnap: true };
 const KEY_SETTINGS = 'homecam.settings.v2';
 const KEY_PAIR = 'homecam.pair.v2'; // 카메라 폰: 내 ID·토큰·비밀키
 const KEY_CAMS = 'homecam.cams.v2'; // 뷰어 폰: 등록한 카메라 목록
@@ -114,7 +115,7 @@ class Signal {
     dlog('서버 접속 시도 ' + this.base.replace(/^wss?:\/\//, '').split('/')[0] + ' id=' + this.id.slice(0, 6) + '…');
     ws.onopen = () => {
       dlog('웹소켓 열림 (' + (Date.now() - t0) + 'ms)');
-      clearInterval(this.hb); this.hb = setInterval(() => this.raw({ type: 'HEARTBEAT' }), 5000);
+      clearInterval(this.hb); this.hb = setInterval(() => this.raw({ type: 'HEARTBEAT' }), 20000); // 서버 유휴 기준(60~90초)보다 충분히 짧게
       // 같은 ID·토큰으로 다시 붙으면 서버(PeerJS)는 OPEN을 다시 보내지 않는다 → 오류가 없으면 등록된 것으로 본다
       this.ot = setTimeout(() => { if (this.ws === ws && !this.ready) { dlog('OPEN 없이 2초 경과 → 이미 등록된 연결로 보고 진행'); this.markReady(); } }, 2000);
     };
@@ -170,7 +171,7 @@ class Mqtt {
     try { ws = new WebSocket(this.url, ['mqtt']); } catch (e) { dlog('MQTT 주소 오류: ' + e.message); return this.retry(); }
     ws.binaryType = 'arraybuffer'; this.ws = ws; this.buf = new Uint8Array(0); const t0 = Date.now();
     dlog('MQTT 접속 시도 ' + this.name);
-    ws.onopen = () => this.pkt(0x10, [...mqStr('MQTT'), 4, 0x02, 0, 60, ...mqStr('hc' + hex(rand(8)))]);
+    ws.onopen = () => this.pkt(0x10, [...mqStr('MQTT'), 4, 0x02, 0, 90, ...mqStr('hc' + hex(rand(8)))]); // keepalive 90초
     ws.onmessage = (e) => { if (this.ws === ws) this.feed(new Uint8Array(e.data)); };
     ws.onclose = (e) => {
       if (this.ws !== ws) return;
@@ -200,7 +201,7 @@ class Mqtt {
       this.pkt(0x82, [0, 1, ...mqStr(mqTopic(this.inbox)), 0]);
     } else if (type === 9) { // SUBACK
       dlog('MQTT 준비 ' + this.name);
-      clearInterval(this.hb); this.hb = setInterval(() => this.pkt(0xc0, []), 25000);
+      clearInterval(this.hb); this.hb = setInterval(() => this.pkt(0xc0, []), 45000);
       this.ready = true; this.fails = 0; if (this.h.open) this.h.open();
     } else if (type === 3) { // PUBLISH
       const tl = (body[0] << 8) | body[1]; const off = 2 + tl + (((flags >> 1) & 3) ? 2 : 0);
@@ -437,6 +438,7 @@ async function startCamera() {
   clearInterval(cam.watch); cam.watch = setInterval(camWatchdog, 10000);
   camStatsLoop();
   bumpIdle();
+  scheduleStandby();
   if (!cam.pair.shown) { cam.pair.shown = true; writeJSON(KEY_PAIR, cam.pair); openPairSheet(); }
 }
 
@@ -463,6 +465,7 @@ function camStatus() {
   if (isBlocked()) setStatus('cam', '⛔ 인증 실패가 많아 ' + Math.ceil((cam.blockedUntil - Date.now()) / 60000) + '분간 새 연결 차단' + fail, 'bad');
   else if (!cam.sig || !cam.sig.ready) setStatus('cam', '연결 서버에 등록 중…' + fail);
   else if (n) setStatus('cam', '보는 중 ' + n + '/' + max + '명' + fail, 'ok');
+  else if (!cam.stream) setStatus('cam', '대기 모드 · 카메라 꺼짐(배터리 절약) · 뷰어가 오면 켜져요' + fail, 'ok');
   else setStatus('cam', '대기 중 · 등록된 뷰어만 볼 수 있어요' + fail, 'ok');
 }
 
@@ -489,6 +492,7 @@ async function onCamSignal(m) {
     const fresh = typeof md.ts === 'number' && Math.abs(Date.now() - md.ts) < 10 * 60000;
     cam.seen.add(sid); if (cam.seen.size > 300) cam.seen.delete(cam.seen.values().next().value);
     if (!fresh || !(await hmacVerify(cam.hkey, md.tag, offerText(sid, md.ts, sdp)))) { cam.dropped++; dlog('[카메라] 서명이 맞지 않는 연결 신청 무시' + (fresh ? '(열쇠가 다름 → 뷰어 재등록 필요?)' : '(두 폰 시각이 10분 넘게 어긋남)')); camStatus(); return; }
+    if (!cam.stream) ensureStream().catch(() => {}); // 대기 모드면 인증하는 동안 카메라를 미리 켠다(목표 3초 안)
     camSession(m.src, sid, sdp).catch(() => {});
   } else if (m.type === 'CANDIDATE') {
     const ss = cam.sessions.get(p.connectionId);
@@ -539,6 +543,7 @@ function endCam(ss) {
   try { ss.dc.close(); } catch { /* 이미 닫힘 */ }
   ss.pc.close();
   camStatus();
+  scheduleStandby();
 }
 
 /** 인증 문구. 양쪽 난수와 DTLS 지문을 묶는다(역할 이름이 달라 서로의 응답을 재사용할 수 없음). */
@@ -584,7 +589,7 @@ async function onCamData(ss, raw) {
 
 /** 뷰어가 만든 트랜시버에 카메라 트랙을 끼운다(영상은 보내기만, 소리는 양방향). */
 async function attachTracks(pc) {
-  if (!cam.stream) return;
+  try { await ensureStream(); } catch (e) { dlog('[카메라] 카메라 다시 켜기 실패: ' + (e.name || e)); return; }
   for (const tr of pc.getTransceivers()) {
     const kind = tr.receiver.track && tr.receiver.track.kind;
     if (kind === 'video') { tr.direction = 'sendonly'; await tr.sender.replaceTrack(cam.stream.getVideoTracks()[0] || null); }
@@ -601,6 +606,7 @@ async function openStream() {
   for (const t of stream.getTracks()) t.addEventListener('ended', onTrackEnded);
   const at = stream.getAudioTracks()[0]; if (at) at.enabled = cam.micOn;
   $('#camVideo').srcObject = stream;
+  if (!$('#dim').hidden) $('#camVideo').pause();
   tuneExposure(stream.getVideoTracks()[0], q);
   $('#camVideo').classList.toggle('mirror', cam.facing === 'user');
   $('#camMic').hidden = !at; $('#camMic').classList.toggle('on', cam.micOn);
@@ -666,6 +672,9 @@ function camWatchdog() {
 
 /** 카메라 원본 해상도로 한 장 찍어 인증된 채널로 보낸다(16KB 조각). */
 async function sendPhoto(ss) {
+  try { await ensureStream(); } catch { return sendJSON(ss.dc, { t: 'photo', err: 1 }); }
+  const pv = $('#camVideo'); const wasPaused = pv.paused;
+  if (wasPaused) { await pv.play().catch(() => {}); await sleep(150); } // 어둡게 모드에서 멈춘 미리보기를 잠깐 깨움
   const vt = cam.stream && cam.stream.getVideoTracks()[0];
   let src = null; let w = 0; let h = 0;
   if (vt && 'ImageCapture' in window) { try { src = await new ImageCapture(vt).grabFrame(); w = src.width; h = src.height; } catch { src = null; } }
@@ -674,6 +683,7 @@ async function sendPhoto(ss) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   c.getContext('2d').drawImage(src, 0, 0, w, h);
   if (src.close) src.close();
+  if (wasPaused && !$('#dim').hidden) pv.pause();
   const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92));
   if (!blob) return sendJSON(ss.dc, { t: 'photo', err: 1 });
   const buf = await blob.arrayBuffer();
@@ -698,6 +708,7 @@ if (navigator.getBattery) navigator.getBattery().then((b) => { cam.battery = b; 
 async function camStatsLoop() {
   const prevs = new Map();
   while (cam.active) {
+    if (!$('#dim').hidden || !authedCount()) { await sleep(3000); continue; } // 어둡게 모드·뷰어 없음: 통계·화면 갱신 쉼
     const vt = cam.stream && cam.stream.getVideoTracks()[0];
     const st = vt ? vt.getSettings() : {};
     let text = st.width ? '촬영 ' + st.width + '×' + st.height : '';
@@ -731,9 +742,12 @@ async function resetPair() {
 function setDim(on) {
   $('#dim').hidden = !on;
   clearInterval(cam.dimMove);
+  // 어둡게 모드: 미리보기 화면 그리기를 멈춘다(촬영·송출은 계속). OLED는 검은 화면이 전기를 거의 안 씀
+  const pv = $('#camVideo');
+  if (on) { pv.pause(); $('#camStats').textContent = ''; } else if (pv.srcObject) pv.play().catch(() => {});
   if (on) {
     const move = () => { const t = $('#dimText'); t.style.left = 5 + Math.random() * 50 + '%'; t.style.top = 10 + Math.random() * 75 + '%'; };
-    move(); cam.dimMove = setInterval(move, 20000);
+    move(); cam.dimMove = setInterval(move, 60000);
   }
 }
 function bumpIdle() {
@@ -741,10 +755,36 @@ function bumpIdle() {
   if (cam.active && cam.s.autoDim) cam.idle = setTimeout(() => { if ($('#pairSheet').hidden) setDim(true); else bumpIdle(); }, 30000);
 }
 
+/** 카메라가 꺼져 있으면 켠다(여러 곳에서 동시에 불러도 한 번만). */
+function ensureStream() {
+  if (cam.stream) return Promise.resolve();
+  if (!cam.streamP) {
+    const t0 = Date.now();
+    setStatus('cam', '뷰어 접속 · 카메라 켜는 중…');
+    cam.streamP = openStream().then(() => { dlog('[카메라] 대기 모드 해제: 카메라 켜짐 (' + (Date.now() - t0) + 'ms)'); $('#camStandby').hidden = true; camStatus(); })
+      .finally(() => { cam.streamP = null; });
+  }
+  return cam.streamP;
+}
+/** 뷰어가 없으면 설정 시간 뒤 카메라·마이크를 완전히 끈다(시그널링만 유지). */
+function scheduleStandby() {
+  clearTimeout(cam.standby);
+  if (!cam.active || cam.s.camIdle === 'never') return;
+  const wait = Math.max(5, Number(cam.s.camIdle) || 0) * 1000;
+  cam.standby = setTimeout(() => {
+    if (!cam.active || !cam.stream || cam.sessions.size || cam.streamP) return; // 연결이 남아 있으면 끝날 때 다시 예약됨
+    cam.stream.getTracks().forEach((t) => t.stop()); cam.stream = null;
+    $('#camVideo').srcObject = null; $('#camStandby').hidden = false;
+    dlog('[카메라] 대기 모드: 뷰어가 없어 카메라·마이크를 껐어요');
+    camStatus();
+  }, wait);
+}
+
 function stopCamera() {
   cam.active = false;
-  clearInterval(cam.watch); clearTimeout(cam.idle);
+  clearInterval(cam.watch); clearTimeout(cam.idle); clearTimeout(cam.standby);
   for (const ss of [...cam.sessions.values()]) endCam(ss);
+  $('#camStandby').hidden = true;
   if (cam.sig) { cam.sig.stop(); cam.sig = null; }
   if (cam.stream) { cam.stream.getTracks().forEach((t) => t.stop()); cam.stream = null; }
   $('#pairSheet').hidden = true;
@@ -999,8 +1039,8 @@ async function viewStatsLoop() {
 /** 야간 보정 시작(영상이 들어올 때마다). 보정 중이면 달 배지를 보여 준다. */
 function startNight() {
   let was = false;
-  Night.start($('#viewVideo'), $('#nightCanvas'), () => ({ mode: view.s.night, level: view.s.nightLevel }), (on, b, L) => {
-    $('#nightBadge').hidden = !on;
+  Night.start($('#viewVideo'), $('#nightCanvas'), () => ({ mode: view.s.night, level: view.s.nightLevel, strong: !!view.s.nightStrong, fps15: view.s.nightFps15 !== false }), (on, b, L) => {
+    $('#nightBadge').hidden = !on; $('#nightBadge').lastChild.textContent = view.s.nightStrong ? '강한 야간' : '야간 보정';
     if (on !== was) { was = on; dlog('[뷰어] 야간 보정 ' + (on ? '켜짐' : '꺼짐') + ' (밝기 ' + Math.round(L * 100) + '%, 세기 ' + Math.round(b * 100) + '%)'); }
   });
 }
