@@ -29,6 +29,8 @@ const FAIL_LIMIT = 5; const FAIL_WINDOW = 10 * 60000; const BLOCK_MS = 5 * 60000
 // ---------- 작은 도우미 ----------
 
 const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+/** 공식 PeerJS 클라이언트 randomToken과 같은 모양(소문자·숫자 11자), 단 암호학적 난수로. */
+const rtok = () => [...rand(11)].map((b) => (b % 36).toString(36)).join('');
 const hex = (u8) => [...u8].map((b) => b.toString(16).padStart(2, '0')).join('');
 const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
@@ -140,7 +142,7 @@ class Signal {
   }
   raw(o) { if (this.ws && this.ws.readyState === 1) { this.ws.send(JSON.stringify(o)); return true; } return false; }
   send(type, dst, payload) {
-    const ok = this.raw({ type, dst, payload });
+    const ok = this.raw({ type, payload, dst }); // 공식 클라이언트와 같은 순서·모양
     if (type !== 'CANDIDATE') dlog((ok ? '보냄 ' : '보내기 실패(소켓 닫힘) ') + type + ' → ' + String(dst).slice(0, 6) + '… ' + JSON.stringify(payload || {}).length + 'B');
     return ok;
   }
@@ -345,10 +347,15 @@ const cam = { seen: new Set(), dropped: 0, active: false, s: null, pair: null, h
 /** 카메라 폰의 페어링 정보. 없으면 새로 만든다(난수 ID 160비트 + 비밀키 256비트). */
 function loadPair() {
   const p = readJSON(KEY_PAIR, null);
-  try { if (p && /^hc[0-9a-f]{40}$/.test(p.id) && /^[0-9a-f]{32}$/.test(p.token) && unb64u(p.key).length === 32) return p; } catch { /* 깨진 값 */ }
+  try {
+    if (p && /^hc[0-9a-f]{40}$/.test(p.id) && unb64u(p.key).length === 32) {
+      if (!/^[0-9a-z]{6,16}$/.test(p.token)) { p.token = rtok(); writeJSON(KEY_PAIR, p); } // 서버 토큰 모양만 공식 클라이언트와 맞춤(열쇠·ID 그대로)
+      return p;
+    }
+  } catch { /* 깨진 값 */ }
   return newPair();
 }
-function newPair() { const p = { id: 'hc' + hex(rand(20)), token: hex(rand(16)), key: b64u(rand(32)), shown: false }; writeJSON(KEY_PAIR, p); return p; }
+function newPair() { const p = { id: 'hc' + hex(rand(20)), token: rtok(), key: b64u(rand(32)), shown: false }; writeJSON(KEY_PAIR, p); return p; }
 const pairCode = (p) => 'HC1.' + p.id + '.' + p.key;
 const pairLink = (p) => location.origin + location.pathname + '#pair=' + pairCode(p);
 
@@ -425,16 +432,18 @@ async function onCamSignal(m) {
   if (m.type === 'OFFER') {
     if (isBlocked()) return;
     if ([...cam.sessions.values()].filter((x) => !x.authed).length >= 3) return; // 인증 안 된 연결이 쌓이지 않게
-    if (typeof p.sid !== 'string' || typeof p.sdp !== 'string' || cam.sessions.has(p.sid) || cam.seen.has(p.sid)) return;
-    if (/^m=(audio|video)/m.test(p.sdp)) return; // 인증 전엔 영상·소리 협상 금지
+    // 공식 PeerJS 모양: { sdp: {type, sdp}, type: 'data', connectionId, metadata: {ts, tag}, label, reliable, serialization }
+    const sid = p.connectionId; const sdp = p.sdp && p.sdp.type === 'offer' ? p.sdp.sdp : null; const md = p.metadata || {};
+    if (typeof sid !== 'string' || typeof sdp !== 'string' || cam.sessions.has(sid) || cam.seen.has(sid)) return;
+    if (/^m=(audio|video)/m.test(sdp)) return; // 인증 전엔 영상·소리 협상 금지
     // 열쇠로 서명한 신청만 받는다(공개 중개 길에서 엿본 사람은 연결 자체를 못 만듦). 같은 신청 재사용·10분 넘은 신청 거부.
-    const fresh = typeof p.ts === 'number' && Math.abs(Date.now() - p.ts) < 10 * 60000;
-    cam.seen.add(p.sid); if (cam.seen.size > 300) cam.seen.delete(cam.seen.values().next().value);
-    if (!fresh || !(await hmacVerify(cam.hkey, p.tag, offerText(p.sid, p.ts, p.sdp)))) { cam.dropped++; dlog('[카메라] 서명 없는 연결 신청 무시' + (fresh ? '' : '(시각 어긋남)')); camStatus(); return; }
-    camSession(m.src, p.sid, p.sdp).catch(() => {});
+    const fresh = typeof md.ts === 'number' && Math.abs(Date.now() - md.ts) < 10 * 60000;
+    cam.seen.add(sid); if (cam.seen.size > 300) cam.seen.delete(cam.seen.values().next().value);
+    if (!fresh || !(await hmacVerify(cam.hkey, md.tag, offerText(sid, md.ts, sdp)))) { cam.dropped++; dlog('[카메라] 서명 없는 연결 신청 무시' + (fresh ? '' : '(시각 어긋남)')); camStatus(); return; }
+    camSession(m.src, sid, sdp).catch(() => {});
   } else if (m.type === 'CANDIDATE') {
-    const ss = cam.sessions.get(p.sid);
-    if (ss && ss.peer === m.src && p.c) addCandidate(ss, p.c);
+    const ss = cam.sessions.get(p.connectionId);
+    if (ss && ss.peer === m.src && p.candidate) addCandidate(ss, p.candidate);
   }
   // EXPIRE·LEAVE(PeerJS 길에서만 옴)로는 끊지 않는다: 다른 길로 답이 갔을 수 있고, 인증 안 된 연결은 12초 뒤 알아서 정리된다.
 }
@@ -450,7 +459,7 @@ async function camSession(peer, sid, sdp) {
   const ss = { sid, peer, pc, dc, authed: false, nonce: '', pending: [], audio: null, ended: false };
   cam.sessions.set(sid, ss);
   ss.timer = setTimeout(() => { if (!ss.authed) endCam(ss); }, AUTH_TIMEOUT);
-  pc.onicecandidate = (e) => { if (e.candidate && ss.sent && cam.sig) cam.sig.send('CANDIDATE', peer, { sid, c: e.candidate.toJSON() }); }; // 늦게 나온 후보만 따로
+  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && cam.sig) cam.sig.send('CANDIDATE', peer, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
   pc.onconnectionstatechange = () => { dlog('[카메라] 연결 상태 ' + pc.connectionState); if (['failed', 'closed'].includes(pc.connectionState)) endCam(ss); else if (pc.connectionState === 'connected' && ss.authed) tuneSenders(pc); };
   pc.ontrack = (e) => {
     if (!ss.authed || e.track.kind !== 'audio') return;
@@ -466,7 +475,7 @@ async function camSession(peer, sid, sdp) {
   await pc.setLocalDescription(await pc.createAnswer());
   await waitIce(pc);
   ss.sent = true;
-  if (cam.sig) cam.sig.send('ANSWER', peer, { sid, sdp: pc.localDescription.sdp }); // 열린 길 모두로(한 길이 끊겨도 다른 길로 도착)
+  if (cam.sig) cam.sig.send('ANSWER', peer, { sdp: { sdp: pc.localDescription.sdp, type: 'answer' }, type: 'data', connectionId: sid }); // 열린 길 모두로(한 길이 끊겨도 다른 길로 도착)
   ss.pending.splice(0).forEach((c) => pc.addIceCandidate(c).catch(() => {}));
 }
 
@@ -759,7 +768,7 @@ async function startViewer(entry) {
   view.hkey = await hmacKey(entry.key);
   show('view'); setStatus('view', '연결 서버에 접속 중…');
   keepAwake(true);
-  view.sig = makeRelay(s, 'hv' + hex(rand(16)), hex(rand(16)), false, {
+  view.sig = makeRelay(s, 'hv' + hex(rand(16)), rtok(), false, {
     open: () => dial(),
     more: () => { const ss = view.ss; if (ss && ss.offer && !ss.authed) view.sig.send('OFFER', view.cam.id, ss.offer); }, // 늦게 열린 길로도 같은 신청
     msg: onViewSignal,
@@ -792,13 +801,13 @@ async function dial() {
   view.gotVideo = false;
   setStatus('view', '카메라에 연결 중…');
   dlog('[뷰어] 카메라에 연결 시도');
-  const camId = view.cam.id; const sid = hex(rand(8));
+  const camId = view.cam.id; const sid = 'dc_' + rtok(); // 공식 DataConnection ID 모양
   const pc = new RTCPeerConnection(rtcConfig(view.s));
   const dc = pc.createDataChannel('ctl', { negotiated: true, id: 0 });
   dc.binaryType = 'arraybuffer';
   const ss = { sid, pc, dc, pending: [], authed: false };
   view.ss = ss;
-  pc.onicecandidate = (e) => { if (e.candidate && ss.sent && view.sig) view.sig.send('CANDIDATE', camId, { sid, c: e.candidate.toJSON() }); }; // 늦게 나온 후보만 따로
+  pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate && ss.sent && view.sig) view.sig.send('CANDIDATE', camId, { candidate: e.candidate.toJSON(), type: 'data', connectionId: sid }); }; // 늦게 나온 후보만 따로
   pc.onconnectionstatechange = () => {
     if (view.ss !== ss) return;
     const st = pc.connectionState;
@@ -820,7 +829,7 @@ async function dial() {
   const sdp = pc.localDescription.sdp; const ts = Date.now();
   const tag = await hmacSign(view.hkey, offerText(sid, ts, sdp));
   if (view.ss !== ss || !view.sig) return;
-  ss.offer = { sid, sdp, ts, tag };
+  ss.offer = { sdp: { sdp, type: 'offer' }, type: 'data', connectionId: sid, metadata: { ts, tag }, label: sid, reliable: true, serialization: 'binary' };
   if (!view.sig.send('OFFER', camId, ss.offer)) redial(1000); // 열린 중개 길 모두로
 }
 
@@ -829,13 +838,14 @@ function onViewSignal(m) {
   if (m.src !== view.cam.id) return;
   // PeerJS 길에서만 오는 알림. 다른 길(MQTT)로 답이 올 수 있으니 끊지 않고 안내만(20초 안에 답 없으면 다시 시도).
   if (m.type === 'EXPIRE' || m.type === 'LEAVE') { if (!view.gotVideo) { setStatus('view', '카메라를 찾는 중… (꺼져 있거나 등록이 바뀌었을 수 있어요)', 'bad'); dlog('[뷰어] PeerJS: 카메라 없음(' + m.type + ')'); } return; }
-  if (!ss || p.sid !== ss.sid) return;
-  if (m.type === 'ANSWER' && typeof p.sdp === 'string' && !ss.answered) {
+  if (!ss || p.connectionId !== ss.sid) return;
+  const sdp = p.sdp && p.sdp.type === 'answer' ? p.sdp.sdp : null;
+  if (m.type === 'ANSWER' && typeof sdp === 'string' && !ss.answered) {
     ss.answered = true; // 같은 답이 여러 길로 거의 동시에 오므로 첫 답만(비동기 적용 중 두 번째가 오면 오류가 남)
-    if (/^m=(audio|video)/m.test(p.sdp)) return redial(3000);
-    ss.pc.setRemoteDescription({ type: 'answer', sdp: p.sdp }).then(() => ss.pending.splice(0).forEach((c) => ss.pc.addIceCandidate(c).catch(() => {}))).catch(() => redial(3000));
-  } else if (m.type === 'CANDIDATE' && p.c) {
-    if (ss.pc.remoteDescription) ss.pc.addIceCandidate(p.c).catch(() => {}); else ss.pending.push(p.c);
+    if (/^m=(audio|video)/m.test(sdp)) return redial(3000);
+    ss.pc.setRemoteDescription({ type: 'answer', sdp }).then(() => ss.pending.splice(0).forEach((c) => ss.pc.addIceCandidate(c).catch(() => {}))).catch(() => redial(3000));
+  } else if (m.type === 'CANDIDATE' && p.candidate) {
+    if (ss.pc.remoteDescription) ss.pc.addIceCandidate(p.candidate).catch(() => {}); else ss.pending.push(p.candidate);
   }
 }
 
