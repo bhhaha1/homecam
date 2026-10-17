@@ -90,6 +90,7 @@
       <div class="field"><label for="turnUser">TURN 사용자 이름</label><input id="turnUser" autocomplete="off"></div>
       <div class="field"><label for="turnPass">TURN 비밀번호</label><input id="turnPass" type="password" autocomplete="off"></div>
       <div class="field"><label for="server">중개 서버 (비우면 PeerJS 무료 서버)</label><input id="server" autocomplete="off" placeholder="https://my-peer-server.example.com/"></div>
+      <div class="field"><label for="brokers">보조 중개 길 (공개 MQTT 브로커)</label><input id="brokers" autocomplete="off" placeholder="비우면 기본값 · off 입력 시 사용 안 함"><small>PeerJS 서버와 함께 써서 한쪽이 끊겨도 연결돼요. 연결 신청은 열쇠로 서명돼 있어요.</small></div>
     </details>
   </section>
   <button id="goDiag" class="block">진단 보기 (연결 문제 기록)</button>

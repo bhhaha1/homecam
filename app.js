@@ -19,7 +19,7 @@ const QUALITY = {
   low: { w: 640, h: 480, fps: 20, kbps: 800 },
 };
 const STUN = [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }];
-const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '' };
+const DEFAULTS = { quality: 'high', maxViewers: '1', audio: true, autoDim: true, turnUrl: '', turnUser: '', turnPass: '', server: '', brokers: '' };
 const KEY_SETTINGS = 'homecam.settings.v2';
 const KEY_PAIR = 'homecam.pair.v2'; // 카메라 폰: 내 ID·토큰·비밀키
 const KEY_CAMS = 'homecam.cams.v2'; // 뷰어 폰: 등록한 카메라 목록
@@ -149,6 +149,115 @@ class Signal {
   stop() { this.stopped = true; this.ready = false; clearTimeout(this.rt); clearTimeout(this.ot); clearInterval(this.hb); const ws = this.ws; this.ws = null; if (ws) ws.close(); }
 }
 
+// ---------- 두 번째 중개 길: 공개 MQTT 브로커(설치·가입 없음) ----------
+// PeerJS 서버가 특정 망에서 끊길 때를 대비해, 같은 메시지를 공개 MQTT 브로커로도 주고받는다.
+// 브로커는 누구나 볼 수 있으므로: 연결 신청(OFFER)엔 열쇠로 만든 서명을 붙이고, 영상 인증은 기존 상호 인증이 그대로 지킨다.
+const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+const mqStr = (t) => { const b = utf8(t); return [b.length >> 8, b.length & 255, ...b]; };
+const mqTopic = (id) => 'hcam1/' + id;
+
+/** MQTT 3.1.1 최소 클라이언트(연결·구독·발행 QoS0·핑). 받는 함은 inbox 하나. */
+class Mqtt {
+  constructor(url, inbox) { this.url = url; this.inbox = inbox; this.h = {}; this.fails = 0; this.ready = false; this.stopped = false; this.name = url.replace(/^wss?:\/\//, '').split(/[:/]/)[0]; }
+  start() { this.stopped = false; this.connect(); }
+  connect() {
+    clearTimeout(this.rt);
+    let ws;
+    try { ws = new WebSocket(this.url, ['mqtt']); } catch (e) { dlog('MQTT 주소 오류: ' + e.message); return this.retry(); }
+    ws.binaryType = 'arraybuffer'; this.ws = ws; this.buf = new Uint8Array(0); const t0 = Date.now();
+    dlog('MQTT 접속 시도 ' + this.name);
+    ws.onopen = () => this.pkt(0x10, [...mqStr('MQTT'), 4, 0x02, 0, 60, ...mqStr('hc' + hex(rand(8)))]);
+    ws.onmessage = (e) => { if (this.ws === ws) this.feed(new Uint8Array(e.data)); };
+    ws.onclose = (e) => {
+      if (this.ws !== ws) return;
+      dlog('MQTT 닫힘 ' + this.name + ' code=' + e.code + ' (' + Math.round((Date.now() - t0) / 100) / 10 + '초 유지)');
+      this.ready = false; clearInterval(this.hb);
+      if (this.h.down) this.h.down(e.code);
+      if (!this.stopped) this.retry();
+    };
+    ws.onerror = () => {};
+  }
+  /** 받은 바이트를 MQTT 패킷 단위로 잘라 처리한다(한 프레임에 여러 개·반쪽이 와도 됨). */
+  feed(chunk) {
+    const b = new Uint8Array(this.buf.length + chunk.length); b.set(this.buf); b.set(chunk, this.buf.length);
+    let i = 0;
+    while (b.length - i >= 2) {
+      let len = 0; let mul = 1; let j = i + 1; let byte;
+      do { if (j >= b.length) { this.buf = b.slice(i); return; } byte = b[j++]; len += (byte & 127) * mul; mul *= 128; } while (byte & 128);
+      if (b.length - j < len) break;
+      this.handle(b[i] >> 4, b[i] & 15, b.subarray(j, j + len));
+      i = j + len;
+    }
+    this.buf = b.slice(i);
+  }
+  handle(type, flags, body) {
+    if (type === 2) { // CONNACK
+      if (body[1] !== 0) { dlog('MQTT 거절 ' + this.name + ' rc=' + body[1]); return this.ws.close(); }
+      this.pkt(0x82, [0, 1, ...mqStr(mqTopic(this.inbox)), 0]);
+    } else if (type === 9) { // SUBACK
+      dlog('MQTT 준비 ' + this.name);
+      clearInterval(this.hb); this.hb = setInterval(() => this.pkt(0xc0, []), 25000);
+      this.ready = true; this.fails = 0; if (this.h.open) this.h.open();
+    } else if (type === 3) { // PUBLISH
+      const tl = (body[0] << 8) | body[1]; const off = 2 + tl + (((flags >> 1) & 3) ? 2 : 0);
+      let m; try { m = JSON.parse(new TextDecoder().decode(body.subarray(off))); } catch { return; }
+      if (!m || typeof m !== 'object' || typeof m.type !== 'string' || typeof m.src !== 'string') return;
+      if (m.type !== 'CANDIDATE') dlog('받음 ' + m.type + ' ← ' + m.src.slice(0, 6) + '… (MQTT ' + this.name + ')');
+      if (this.h.msg) this.h.msg(m);
+    }
+  }
+  pkt(head, body) {
+    if (!this.ws || this.ws.readyState !== 1) return false;
+    const len = []; let n = body.length;
+    do { let d = n % 128; n = Math.floor(n / 128); if (n) d |= 128; len.push(d); } while (n);
+    this.ws.send(Uint8Array.from([head, ...len, ...body])); return true;
+  }
+  send(type, dst, payload) {
+    if (!this.ready) return false;
+    const ok = this.pkt(0x30, [...mqStr(mqTopic(dst)), ...utf8(JSON.stringify({ type, src: this.inbox, payload }))]);
+    if (type !== 'CANDIDATE') dlog((ok ? '보냄 ' : '보내기 실패 ') + type + ' → ' + String(dst).slice(0, 6) + '… (MQTT ' + this.name + ')');
+    return ok;
+  }
+  retry() { clearTimeout(this.rt); const wait = Math.min(30000, 1000 * 2 ** Math.min(this.fails++, 5)); this.rt = setTimeout(() => this.connect(), wait); }
+  kick() { if (!this.stopped && (!this.ws || this.ws.readyState > 1)) { this.fails = 0; this.connect(); } }
+  stop() { this.stopped = true; this.ready = false; clearTimeout(this.rt); clearInterval(this.hb); const ws = this.ws; this.ws = null; if (ws) ws.close(); }
+}
+
+/**
+ * 여러 중개 길을 하나처럼 쓴다. 보낼 때 via(받은 길)가 있으면 그 길로만, 없으면 열린 길 모두로.
+ * 하나라도 열리면 open, 모두 닫히면 down.
+ */
+class Relay {
+  constructor(list, h) {
+    this.list = list; this.h = h; this.opened = false;
+    for (const t of list) {
+      t.h = {
+        open: () => { if (!this.opened) { this.opened = true; if (h.open) h.open(); } else if (h.more) h.more(); },
+        msg: (m) => { m.via = t; h.msg(m); },
+        down: (code) => { if (!this.ready && this.opened) { this.opened = false; if (h.down) h.down(code); } },
+        taken: () => { if (h.taken) h.taken(); },
+        error: (msg) => { if (h.error) h.error(msg); },
+      };
+    }
+  }
+  get ready() { return this.list.some((t) => t.ready); }
+  start() { this.list.forEach((t) => t.start()); }
+  send(type, dst, payload, via) {
+    if (via) return via.send(type, dst, payload);
+    let ok = false; for (const t of this.list) if (t.ready) ok = t.send(type, dst, payload) || ok; return ok;
+  }
+  kick() { this.list.forEach((t) => t.kick()); }
+  stop() { this.list.forEach((t) => t.stop()); }
+}
+
+/** 설정대로 중개 길 묶음을 만든다. brokers: 비우면 기본 공개 브로커, 'off'면 MQTT 안 씀. */
+function makeRelay(s, id, token, fresh, h) {
+  const list = [new Signal(signalBase(s), id, token, {}, fresh)];
+  const urls = s.brokers === 'off' ? [] : (s.brokers ? s.brokers.split(',').map((u) => u.trim()).filter(Boolean) : BROKERS);
+  for (const u of urls) list.push(new Mqtt(u, id));
+  return new Relay(list, h);
+}
+
 /** ICE 후보 모으기를 잠깐 기다린다 → 후보를 SDP에 담아 한 번에 보내 중개 서버로 가는 메시지를 줄인다. */
 function waitIce(pc, ms = 2500) {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
@@ -231,7 +340,7 @@ async function readStats(pc, dir, prev) {
 // 카메라(A) 모드
 // =====================================================================
 
-const cam = { active: false, s: null, pair: null, hkey: null, sig: null, stream: null, facing: 'environment', sessions: new Map(), fails: [], failTotal: 0, blockedUntil: 0, watch: 0, idle: 0, dimMove: 0, micOn: true, torch: false, battery: null };
+const cam = { seen: new Set(), dropped: 0, active: false, s: null, pair: null, hkey: null, sig: null, stream: null, facing: 'environment', sessions: new Map(), fails: [], failTotal: 0, blockedUntil: 0, watch: 0, idle: 0, dimMove: 0, micOn: true, torch: false, battery: null };
 
 /** 카메라 폰의 페어링 정보. 없으면 새로 만든다(난수 ID 160비트 + 비밀키 256비트). */
 function loadPair() {
@@ -269,18 +378,18 @@ async function startCamera() {
   cam.pair = loadPair();
   cam.hkey = await hmacKey(cam.pair.key);
   keepAwake(true);
-  connectCamSignal(base);
+  connectCamSignal();
   clearInterval(cam.watch); cam.watch = setInterval(camWatchdog, 10000);
   camStatsLoop();
   bumpIdle();
   if (!cam.pair.shown) { cam.pair.shown = true; writeJSON(KEY_PAIR, cam.pair); openPairSheet(); }
 }
 
-function connectCamSignal(base) {
+function connectCamSignal() {
   if (cam.sig) cam.sig.stop();
   setStatus('cam', '연결 서버에 등록 중…');
-  cam.sig = new Signal(base, cam.pair.id, cam.pair.token, {
-    open: camStatus,
+  cam.sig = makeRelay(cam.s, cam.pair.id, cam.pair.token, false, {
+    open: camStatus, more: camStatus,
     msg: onCamSignal,
     down: (code) => setStatus('cam', '서버와 끊김(' + code + ') · 다시 연결 중…', 'bad'),
     taken: () => setStatus('cam', '이 카메라 ID를 다른 기기가 쓰고 있어요 · 페어링 초기화를 해 주세요', 'bad'),
@@ -295,7 +404,7 @@ const isBlocked = () => Date.now() < cam.blockedUntil;
 function camStatus() {
   if (!cam.active) return;
   const max = Number(cam.s.maxViewers) || 1; const n = authedCount();
-  const fail = cam.failTotal ? ' · ⚠ 인증 실패 ' + cam.failTotal + '회' : '';
+  const fail = (cam.failTotal ? ' · ⚠ 인증 실패 ' + cam.failTotal + '회' : '') + (cam.dropped ? ' · 무시한 신청 ' + cam.dropped + '건' : '');
   if (isBlocked()) setStatus('cam', '⛔ 인증 실패가 많아 ' + Math.ceil((cam.blockedUntil - Date.now()) / 60000) + '분간 새 연결 차단' + fail, 'bad');
   else if (!cam.sig || !cam.sig.ready) setStatus('cam', '연결 서버에 등록 중…' + fail);
   else if (n) setStatus('cam', '보는 중 ' + n + '/' + max + '명' + fail, 'ok');
@@ -316,15 +425,18 @@ async function onCamSignal(m) {
   if (m.type === 'OFFER') {
     if (isBlocked()) return;
     if ([...cam.sessions.values()].filter((x) => !x.authed).length >= 3) return; // 인증 안 된 연결이 쌓이지 않게
-    if (typeof p.sid !== 'string' || typeof p.sdp !== 'string' || cam.sessions.has(p.sid)) return;
+    if (typeof p.sid !== 'string' || typeof p.sdp !== 'string' || cam.sessions.has(p.sid) || cam.seen.has(p.sid)) return;
     if (/^m=(audio|video)/m.test(p.sdp)) return; // 인증 전엔 영상·소리 협상 금지
+    // 열쇠로 서명한 신청만 받는다(공개 중개 길에서 엿본 사람은 연결 자체를 못 만듦). 같은 신청 재사용·10분 넘은 신청 거부.
+    const fresh = typeof p.ts === 'number' && Math.abs(Date.now() - p.ts) < 10 * 60000;
+    cam.seen.add(p.sid); if (cam.seen.size > 300) cam.seen.delete(cam.seen.values().next().value);
+    if (!fresh || !(await hmacVerify(cam.hkey, p.tag, offerText(p.sid, p.ts, p.sdp)))) { cam.dropped++; dlog('[카메라] 서명 없는 연결 신청 무시' + (fresh ? '' : '(시각 어긋남)')); camStatus(); return; }
     camSession(m.src, p.sid, p.sdp).catch(() => {});
   } else if (m.type === 'CANDIDATE') {
     const ss = cam.sessions.get(p.sid);
     if (ss && ss.peer === m.src && p.c) addCandidate(ss, p.c);
-  } else if (m.type === 'LEAVE' || m.type === 'EXPIRE') {
-    for (const ss of [...cam.sessions.values()]) if (ss.peer === m.src) endCam(ss);
   }
+  // EXPIRE·LEAVE(PeerJS 길에서만 옴)로는 끊지 않는다: 다른 길로 답이 갔을 수 있고, 인증 안 된 연결은 12초 뒤 알아서 정리된다.
 }
 
 function addCandidate(ss, c) {
@@ -354,7 +466,7 @@ async function camSession(peer, sid, sdp) {
   await pc.setLocalDescription(await pc.createAnswer());
   await waitIce(pc);
   ss.sent = true;
-  if (cam.sig) cam.sig.send('ANSWER', peer, { sid, sdp: pc.localDescription.sdp });
+  if (cam.sig) cam.sig.send('ANSWER', peer, { sid, sdp: pc.localDescription.sdp }); // 열린 길 모두로(한 길이 끊겨도 다른 길로 도착)
   ss.pending.splice(0).forEach((c) => pc.addIceCandidate(c).catch(() => {}));
 }
 
@@ -369,6 +481,8 @@ function endCam(ss) {
 }
 
 /** 인증 문구. 양쪽 난수와 DTLS 지문을 묶는다(역할 이름이 달라 서로의 응답을 재사용할 수 없음). */
+/** 연결 신청 서명 문구(신청 번호·시각·뷰어 DTLS 지문). */
+const offerText = (sid, ts, sdp) => 'homecam/1|offer|' + sid + '|' + ts + '|' + fpOf(sdp);
 const authText = (role, nC, nV, fpV, fpC) => 'homecam/1|' + role + '|' + nC + '|' + nV + '|' + fpV + '|' + fpC;
 
 async function onCamData(ss, raw) {
@@ -528,8 +642,8 @@ async function resetPair() {
   for (const ss of [...cam.sessions.values()]) endCam(ss);
   cam.pair = newPair(); cam.pair.shown = true; writeJSON(KEY_PAIR, cam.pair);
   cam.hkey = await hmacKey(cam.pair.key);
-  cam.fails = []; cam.failTotal = 0; cam.blockedUntil = 0;
-  connectCamSignal(signalBase(cam.s));
+  cam.fails = []; cam.failTotal = 0; cam.blockedUntil = 0; cam.dropped = 0; cam.seen.clear();
+  connectCamSignal();
   openPairSheet();
   toast('새 열쇠를 만들었어요. 뷰어에서 다시 등록하세요.', 4000);
 }
@@ -645,12 +759,13 @@ async function startViewer(entry) {
   view.hkey = await hmacKey(entry.key);
   show('view'); setStatus('view', '연결 서버에 접속 중…');
   keepAwake(true);
-  view.sig = new Signal(base, 'hv' + hex(rand(16)), hex(rand(16)), {
+  view.sig = makeRelay(s, 'hv' + hex(rand(16)), hex(rand(16)), false, {
     open: () => dial(),
+    more: () => { const ss = view.ss; if (ss && ss.offer && !ss.authed) view.sig.send('OFFER', view.cam.id, ss.offer); }, // 늦게 열린 길로도 같은 신청
     msg: onViewSignal,
     down: (code) => { if (!view.gotVideo) setStatus('view', '서버와 끊김(' + code + ') · 다시 연결 중…', 'bad'); },
     error: (msg) => setStatus('view', '서버 오류: ' + msg, 'bad'),
-  }, true);
+  });
   view.sig.start();
   viewStatsLoop();
 }
@@ -697,21 +812,26 @@ async function dial() {
   dc.onmessage = (e) => onViewData(ss, e.data).catch(() => {});
   dc.onopen = () => dlog('[뷰어] 명령 채널 열림');
   dc.onclose = () => { if (view.ss === ss) dlog('[뷰어] 명령 채널 닫힘'); if (view.ss === ss) redial(1500, '카메라와 끊김 · 다시 연결 중…'); };
-  ss.timer = setTimeout(() => { if (view.ss === ss && !ss.authed) redial(1000, '응답 없음 · 다시 시도'); }, 20000);
+  ss.timer = setTimeout(() => { if (view.ss === ss && !ss.authed) redial(1000, '카메라 응답 없음(꺼져 있거나 등록이 바뀌었을 수 있어요) · 다시 시도'); }, 20000);
   await pc.setLocalDescription(await pc.createOffer());
   await waitIce(pc);
   if (view.ss !== ss || !view.sig) return;
   ss.sent = true;
-  if (!view.sig.send('OFFER', camId, { sid, sdp: pc.localDescription.sdp })) redial(1000);
+  const sdp = pc.localDescription.sdp; const ts = Date.now();
+  const tag = await hmacSign(view.hkey, offerText(sid, ts, sdp));
+  if (view.ss !== ss || !view.sig) return;
+  ss.offer = { sid, sdp, ts, tag };
+  if (!view.sig.send('OFFER', camId, ss.offer)) redial(1000); // 열린 중개 길 모두로
 }
 
 function onViewSignal(m) {
   const ss = view.ss; const p = m.payload || {};
   if (m.src !== view.cam.id) return;
-  if (m.type === 'EXPIRE') return redial(4000, '카메라가 꺼져 있거나 등록이 바뀌었어요 · 다시 찾는 중…');
-  if (m.type === 'LEAVE') return redial(2000, '카메라가 나갔어요 · 다시 찾는 중…');
+  // PeerJS 길에서만 오는 알림. 다른 길(MQTT)로 답이 올 수 있으니 끊지 않고 안내만(20초 안에 답 없으면 다시 시도).
+  if (m.type === 'EXPIRE' || m.type === 'LEAVE') { if (!view.gotVideo) { setStatus('view', '카메라를 찾는 중… (꺼져 있거나 등록이 바뀌었을 수 있어요)', 'bad'); dlog('[뷰어] PeerJS: 카메라 없음(' + m.type + ')'); } return; }
   if (!ss || p.sid !== ss.sid) return;
-  if (m.type === 'ANSWER' && typeof p.sdp === 'string' && !ss.pc.remoteDescription) {
+  if (m.type === 'ANSWER' && typeof p.sdp === 'string' && !ss.answered) {
+    ss.answered = true; // 같은 답이 여러 길로 거의 동시에 오므로 첫 답만(비동기 적용 중 두 번째가 오면 오류가 남)
     if (/^m=(audio|video)/m.test(p.sdp)) return redial(3000);
     ss.pc.setRemoteDescription({ type: 'answer', sdp: p.sdp }).then(() => ss.pending.splice(0).forEach((c) => ss.pc.addIceCandidate(c).catch(() => {}))).catch(() => redial(3000));
   } else if (m.type === 'CANDIDATE' && p.c) {
